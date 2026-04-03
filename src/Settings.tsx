@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import './Settings.css'
 
@@ -7,172 +7,147 @@ interface ShortcutConfig {
   key: string
 }
 
-const MODIFIER_OPTIONS = ['Alt', 'Ctrl', 'Shift', 'Win']
-const KEY_OPTIONS = ['Space', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']
-
 function Settings() {
-  const [shortcut, setShortcut] = useState<ShortcutConfig>({ modifiers: ['Alt', 'Ctrl'], key: 'Space' })
-  const [selectedModifierIndex, setSelectedModifierIndex] = useState(0)
-  const [selectedKeyIndex, setSelectedKeyIndex] = useState(0)
-  const [editingModifiers, setEditingModifiers] = useState(false)
-  const [editingKey, setEditingKey] = useState(false)
+  const [shortcut, setShortcut] = useState<ShortcutConfig>({ modifiers: [], key: '' })
+  const [isRecording, setIsRecording] = useState(false)
+  const [tempShortcut, setTempShortcut] = useState<string>('')
   const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     loadShortcut()
   }, [])
 
-  // Keyboard navigation for modifier selection
+  // Keyboard capture when recording
   useEffect(() => {
+    if (!isRecording) return
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!editingModifiers && !editingKey) {
-        if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          if (editingModifiers) {
-            setSelectedModifierIndex(prev => prev > 0 ? prev - 1 : prev)
-          } else if (editingKey) {
-            setSelectedKeyIndex(prev => prev > 0 ? prev - 1 : prev)
-          }
-        } else if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          if (editingModifiers) {
-            setSelectedModifierIndex(prev => prev < MODIFIER_OPTIONS.length - 1 ? prev + 1 : prev)
-          } else if (editingKey) {
-            setSelectedKeyIndex(prev => prev < KEY_OPTIONS.length - 1 ? prev + 1 : prev)
-          }
-        } else if (e.key === 'Enter') {
-          e.preventDefault()
-          if (!editingModifiers && !editingKey) {
-            setEditingModifiers(true)
-          } else if (editingModifiers) {
-            toggleModifier(MODIFIER_OPTIONS[selectedModifierIndex])
-            setEditingModifiers(false)
-          } else if (editingKey) {
-            setShortcut(prev => ({ ...prev, key: KEY_OPTIONS[selectedKeyIndex] }))
-            setEditingKey(false)
-          }
-        } else if (e.key === 'Escape') {
-          e.preventDefault()
-          if (editingModifiers) {
-            setEditingModifiers(false)
-          } else if (editingKey) {
-            setEditingKey(false)
-          } else {
-            invoke('close_settings')
-          }
-        } else if (e.key === 'Tab') {
-          e.preventDefault()
-          if (!editingModifiers && !editingKey) {
-            if (e.shiftKey) {
-              setEditingKey(true)
-              setEditingModifiers(false)
-            } else {
-              setEditingModifiers(true)
-              setEditingKey(false)
-            }
-          } else if (editingModifiers) {
-            setEditingModifiers(false)
-            setEditingKey(true)
-            setSelectedKeyIndex(0)
-          } else if (editingKey) {
-            setEditingKey(false)
-            setEditingModifiers(true)
-            setSelectedModifierIndex(0)
-          }
-        }
+      e.preventDefault()
+      e.stopPropagation()
+
+      const modifiers: string[] = []
+      if (e.altKey) modifiers.push('Alt')
+      if (e.ctrlKey) modifiers.push('Ctrl')
+      if (e.shiftKey) modifiers.push('Shift')
+      if (e.metaKey) modifiers.push('Win')
+
+      // Get the main key
+      let key = ''
+      if (e.code.startsWith('Key')) {
+        key = e.code.replace('Key', '')
+      } else if (e.code.startsWith('Digit')) {
+        key = e.code.replace('Digit', '')
+      } else if (e.code === 'Space') {
+        key = 'Space'
+      } else if (e.code.startsWith('F') && e.code.length <= 3) {
+        key = e.code
+      } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        key = e.code.replace('Arrow', '')
+      } else if (['Escape', 'Enter', 'Tab', 'Backspace', 'Delete', 'Insert', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.code)) {
+        key = e.code
+      }
+
+      if (key && modifiers.length > 0) {
+        setTempShortcut(formatShortcut({ modifiers, key }))
+        setShortcut({ modifiers, key })
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [editingModifiers, editingKey, selectedModifierIndex, selectedKeyIndex])
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [isRecording])
 
   async function loadShortcut() {
     try {
       const config = await invoke<ShortcutConfig>('get_shortcut')
       setShortcut(config)
-      setSelectedKeyIndex(KEY_OPTIONS.indexOf(config.key))
+      setTempShortcut(formatShortcut(config))
     } catch (e) {
       console.error('Failed to load shortcut:', e)
     }
   }
 
   async function saveShortcut() {
+    if (shortcut.modifiers.length === 0 || !shortcut.key) {
+      setError('Please set a valid shortcut')
+      return
+    }
+
     try {
       await invoke('set_shortcut', { config: shortcut })
       setSaved(true)
+      setError('')
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
-      console.error('Failed to save shortcut:', e)
+      setError(`Failed to save: ${e}`)
     }
   }
 
-  function toggleModifier(mod: string) {
-    setShortcut(prev => {
-      const modifiers = prev.modifiers.includes(mod)
-        ? prev.modifiers.filter(m => m !== mod)
-        : [...prev.modifiers, mod]
-      return { ...prev, modifiers }
-    })
+  function formatShortcut(config: ShortcutConfig): string {
+    if (!config.key && config.modifiers.length === 0) return ''
+    const parts = [...config.modifiers, config.key]
+    return parts.join(' + ')
   }
 
-  function formatShortcut(config: ShortcutConfig): string {
-    const modStr = config.modifiers.join(' + ')
-    return `${modStr} + ${config.key}`
+  function startRecording() {
+    setIsRecording(true)
+    setTempShortcut('')
+    inputRef.current?.focus()
+  }
+
+  function stopRecording() {
+    setIsRecording(false)
+    if (shortcut.key) {
+      setTempShortcut(formatShortcut(shortcut))
+    }
   }
 
   return (
     <div className="settings-container">
-      <h2>Settings</h2>
+      <h1>Settings</h1>
 
-      <div className="setting-item">
-        <label>Global Shortcut</label>
-        <div className="shortcut-display">
-          <span className="shortcut-preview">{formatShortcut(shortcut)}</span>
+      <div className="setting-row">
+        <div className="setting-label">
+          <span className="label-text">Global Shortcut</span>
+          <span className="label-hint">Press the key combination you want to use</span>
+        </div>
+        <div className="setting-value">
+          <input
+            ref={inputRef}
+            type="text"
+            className={`shortcut-input ${isRecording ? 'recording' : ''}`}
+            value={isRecording ? tempShortcut || 'Press keys...' : formatShortcut(shortcut)}
+            readOnly
+            placeholder="Click to set shortcut"
+            onClick={() => {
+              if (!isRecording) startRecording()
+            }}
+            onBlur={() => {
+              if (isRecording) stopRecording()
+            }}
+          />
+          {isRecording && (
+            <button className="cancel-btn" onClick={stopRecording}>
+              Cancel
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="setting-item">
-        <label>Modifiers</label>
-        <div className="modifier-list">
-          {MODIFIER_OPTIONS.map((mod, index) => (
-            <button
-              key={mod}
-              className={`modifier-btn ${shortcut.modifiers.includes(mod) ? 'active' : ''} ${editingModifiers && index === selectedModifierIndex ? 'selected' : ''}`}
-              onClick={() => toggleModifier(mod)}
-            >
-              {mod}
-            </button>
-          ))}
+      <div className="setting-row">
+        <div className="setting-label">
+          <span className="label-text">Current Shortcut</span>
+          <span className="label-hint">The active keyboard shortcut</span>
         </div>
-        <p className="hint">Press Enter to edit, Tab to switch between sections</p>
+        <div className="setting-value">
+          <span className="current-shortcut">{formatShortcut(shortcut) || 'Not set'}</span>
+        </div>
       </div>
 
-      <div className="setting-item">
-        <label>Key</label>
-        <div className="key-list">
-          {KEY_OPTIONS.slice(0, 20).map((key, index) => (
-            <button
-              key={key}
-              className={`key-btn ${shortcut.key === key ? 'active' : ''} ${editingKey && index === selectedKeyIndex ? 'selected' : ''}`}
-              onClick={() => setShortcut(prev => ({ ...prev, key }))}
-            >
-              {key}
-            </button>
-          ))}
-        </div>
-        <div className="key-list">
-          {KEY_OPTIONS.slice(20).map((key, index) => (
-            <button
-              key={key}
-              className={`key-btn ${shortcut.key === key ? 'active' : ''} ${editingKey && (index + 20) === selectedKeyIndex ? 'selected' : ''}`}
-              onClick={() => setShortcut(prev => ({ ...prev, key }))}
-            >
-              {key}
-            </button>
-          ))}
-        </div>
-      </div>
+      {error && <div className="error-message">{error}</div>}
+      {saved && <div className="success-message">Shortcut saved!</div>}
 
       <div className="actions">
         <button className="save-btn" onClick={saveShortcut}>

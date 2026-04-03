@@ -298,8 +298,29 @@ fn set_shortcut(app: tauri::AppHandle, config: ShortcutConfig) -> Result<(), Str
         if let Err(e) = app.global_shortcut().unregister_all() {
             return Err(format!("Failed to unregister shortcuts: {}", e));
         }
-        // Then register new shortcut
-        if let Err(e) = app.global_shortcut().register(shortcut) {
+        // Register new shortcut with callback
+        let app_handle = app.clone();
+        if let Err(e) = app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                let window = app_handle.get_webview_window("main").unwrap();
+                if window.is_visible().unwrap() {
+                    window.hide().unwrap();
+                } else {
+                    if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+                        let screen_size = screen.size();
+                        let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
+                        let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
+                        let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
+                        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                            x: x as i32,
+                            y: y as i32,
+                        })).unwrap();
+                    }
+                    window.show().unwrap();
+                    window.set_focus().unwrap();
+                }
+            }
+        }) {
             return Err(format!("Failed to register shortcut: {}", e));
         }
         Ok(())
