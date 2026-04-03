@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 mod search;
@@ -146,7 +146,7 @@ mod platform {
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-        SetForegroundWindow, ShowWindow, SW_RESTORE,
+        IsZoomed, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWMAXIMIZED,
     };
 
     pub fn get_windows() -> Vec<WindowInfo> {
@@ -212,7 +212,13 @@ mod platform {
     pub fn switch_window(id: usize) {
         unsafe {
             let hwnd = HWND(id as *mut std::ffi::c_void);
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            // Check if window is maximized
+            let is_maximized = IsZoomed(hwnd).as_bool();
+            if is_maximized {
+                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+            } else {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
             let _ = SetForegroundWindow(hwnd);
         }
     }
@@ -318,6 +324,7 @@ fn set_shortcut(app: tauri::AppHandle, config: ShortcutConfig) -> Result<(), Str
                     }
                     window.show().unwrap();
                     window.set_focus().unwrap();
+                    let _ = app_handle.emit("window-shown", ());
                 }
             }
         }) {
@@ -390,6 +397,7 @@ pub fn run() {
                             }
                             window.show().unwrap();
                             window.set_focus().unwrap();
+                            let _ = app.emit("window-shown", ());
                         }
                         "settings" => {
                             if app.get_webview_window("settings").is_none() {
@@ -447,6 +455,8 @@ pub fn run() {
                             }
                             window.show().unwrap();
                             window.set_focus().unwrap();
+                            // Emit event to clear search
+                            let _ = app_handle.emit("window-shown", ());
                         }
                     }
                 })?;

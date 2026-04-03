@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import './App.css'
 
 // Import settings component conditionally based on window label
@@ -35,6 +36,16 @@ function App() {
 
   useEffect(() => {
     loadWindows()
+  }, [])
+
+  // Clear search when window is shown
+  useEffect(() => {
+    const unlisten = listen('window-shown', () => {
+      setSearch('')
+      setSelectedIndex(0)
+      loadWindows()
+    })
+    return () => { unlisten.then(f => f()) }
   }, [])
 
   // Search when query changes
