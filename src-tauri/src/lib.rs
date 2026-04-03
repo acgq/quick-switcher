@@ -143,12 +143,10 @@ mod platform {
     use windows_core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, CloseHandle, TRUE};
     use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
-    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetForegroundWindow, GetWindowTextW,
-        GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed,
-        SetForegroundWindow, ShowWindow,
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId,
+        IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SwitchToThisWindow,
         SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED,
     };
 
@@ -216,16 +214,6 @@ mod platform {
         unsafe {
             let hwnd = HWND(id as *mut std::ffi::c_void);
 
-            // Get current foreground window thread
-            let foreground_hwnd = GetForegroundWindow();
-            let foreground_thread = GetWindowThreadProcessId(foreground_hwnd, None);
-            let current_thread = GetCurrentThreadId();
-
-            // Attach to foreground thread to allow SetForegroundWindow to work
-            if foreground_thread != current_thread {
-                let _ = AttachThreadInput(current_thread, foreground_thread, true);
-            }
-
             // Check if window is minimized
             let is_iconic = IsIconic(hwnd).as_bool();
 
@@ -240,15 +228,9 @@ mod platform {
                 let _ = ShowWindow(hwnd, SW_SHOW);
             }
 
-            // Force window to foreground
-            let _ = SetForegroundWindow(hwnd);
-            let _ = SetFocus(Some(hwnd));
-            let _ = SetActiveWindow(hwnd);
-
-            // Detach from thread
-            if foreground_thread != current_thread {
-                let _ = AttachThreadInput(current_thread, foreground_thread, false);
-            }
+            // Use SwitchToThisWindow to forcefully bring window to front
+            // This is more reliable than SetForegroundWindow for some apps
+            SwitchToThisWindow(hwnd, true);
         }
     }
 }
