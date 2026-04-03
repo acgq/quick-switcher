@@ -26,7 +26,9 @@
       "Bash(cargo test:*)",
       "WebSearch",
       "Bash(cargo info:*)",
-      "Bash(grep -r \"WindowEvent\" ~/.cargo/registry/src/*/tauri-2*/src/*.rs)"
+      "Bash(grep -r \"WindowEvent\" ~/.cargo/registry/src/*/tauri-2*/src/*.rs)",
+      "Bash(grep -r \"AttachThreadInput\" ~/.cargo/registry/src/*/windows-*/src/)",
+      "Bash(grep:*)"
     ]
   }
 }

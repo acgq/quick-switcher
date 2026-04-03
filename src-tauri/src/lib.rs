@@ -143,10 +143,13 @@ mod platform {
     use windows_core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, CloseHandle, TRUE};
     use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-        IsZoomed, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOWMAXIMIZED,
+        EnumWindows, GetForegroundWindow, GetWindowTextW,
+        GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed,
+        SetForegroundWindow, ShowWindow,
+        SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED,
     };
 
     pub fn get_windows() -> Vec<WindowInfo> {
@@ -212,14 +215,40 @@ mod platform {
     pub fn switch_window(id: usize) {
         unsafe {
             let hwnd = HWND(id as *mut std::ffi::c_void);
-            // Check if window is maximized
-            let is_maximized = IsZoomed(hwnd).as_bool();
-            if is_maximized {
+
+            // Get current foreground window thread
+            let foreground_hwnd = GetForegroundWindow();
+            let foreground_thread = GetWindowThreadProcessId(foreground_hwnd, None);
+            let current_thread = GetCurrentThreadId();
+
+            // Attach to foreground thread to allow SetForegroundWindow to work
+            if foreground_thread != current_thread {
+                let _ = AttachThreadInput(current_thread, foreground_thread, true);
+            }
+
+            // Check if window is minimized
+            let is_iconic = IsIconic(hwnd).as_bool();
+
+            if is_iconic {
+                // If minimized, restore it
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else if IsZoomed(hwnd).as_bool() {
+                // If maximized, show maximized
                 let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
             } else {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
+                // Otherwise just show
+                let _ = ShowWindow(hwnd, SW_SHOW);
             }
+
+            // Force window to foreground
             let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
+            let _ = SetActiveWindow(hwnd);
+
+            // Detach from thread
+            if foreground_thread != current_thread {
+                let _ = AttachThreadInput(current_thread, foreground_thread, false);
+            }
         }
     }
 }
