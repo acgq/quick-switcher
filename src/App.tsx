@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import './App.css'
 
 // Import settings component conditionally based on window label
@@ -10,11 +9,6 @@ interface WindowInfo {
   id: number
   title: string
   process_name: string
-}
-
-interface ShortcutConfig {
-  modifiers: string[]
-  key: string
 }
 
 // Detect if this is the settings window
@@ -34,19 +28,37 @@ function App() {
   const [loading, setLoading] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    loadWindows()
+  // Load windows from backend
+  const loadWindows = useCallback(() => {
+    setLoading(true)
+    invoke<WindowInfo[]>('get_windows')
+      .then(list => {
+        setWindows(list)
+        setFilteredWindows(list)
+      })
+      .catch(e => console.error('Failed to load windows:', e))
+      .finally(() => setLoading(false))
   }, [])
 
-  // Clear search when window is shown
+  // Reset state and reload
+  const resetAndReload = useCallback(() => {
+    setSearch('')
+    setSelectedIndex(0)
+    loadWindows()
+  }, [loadWindows])
+
   useEffect(() => {
-    const unlisten = listen('window-shown', () => {
-      setSearch('')
-      setSelectedIndex(0)
-      loadWindows()
-    })
-    return () => { unlisten.then(f => f()) }
-  }, [])
+    loadWindows()
+  }, [loadWindows])
+
+  // Listen for window focus event - this fires when window is shown
+  useEffect(() => {
+    const handleFocus = () => {
+      resetAndReload()
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [resetAndReload])
 
   // Search when query changes
   useEffect(() => {
@@ -138,18 +150,6 @@ function App() {
       }
     }
   }, [selectedIndex])
-
-  async function loadWindows() {
-    setLoading(true)
-    try {
-      const list = await invoke<WindowInfo[]>('get_windows')
-      setWindows(list)
-      setFilteredWindows(list)
-    } catch (e) {
-      console.error('Failed to load windows:', e)
-    }
-    setLoading(false)
-  }
 
   async function switchToWindow(id: number) {
     await invoke('switch_window', { windowId: id })
