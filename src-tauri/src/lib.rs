@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
@@ -159,11 +161,52 @@ fn hide_window(app: tauri::AppHandle) {
     window.hide().unwrap();
 }
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // Create tray menu
+            let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            // Build tray icon
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "show" => {
+                            let window = app.get_webview_window("main").unwrap();
+                            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+                                let screen_size = screen.size();
+                                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
+                                let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
+                                let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
+                                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                                    x: x as i32,
+                                    y: y as i32,
+                                })).unwrap();
+                            }
+                            window.show().unwrap();
+                            window.set_focus().unwrap();
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            // Setup global shortcut
             let shortcut = Shortcut::new(Some(Modifiers::ALT | Modifiers::CONTROL), Code::Space);
             let app_handle = app.handle().clone();
 
@@ -198,7 +241,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_windows, search_windows, switch_window, hide_window])
+        .invoke_handler(tauri::generate_handler![get_windows, search_windows, switch_window, hide_window, exit_app])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
