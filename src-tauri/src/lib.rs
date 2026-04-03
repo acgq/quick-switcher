@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 mod search;
@@ -11,6 +14,114 @@ pub struct WindowInfo {
     pub id: usize,
     pub title: String,
     pub process_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutConfig {
+    pub modifiers: Vec<String>,
+    pub key: String,
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            modifiers: vec!["Alt".to_string(), "Ctrl".to_string()],
+            key: "Space".to_string(),
+        }
+    }
+}
+
+// Global state for shortcut config
+static SHORTCUT_CONFIG: LazyLock<Mutex<ShortcutConfig>> = LazyLock::new(|| {
+    Mutex::new(load_config())
+});
+
+fn get_config_path() -> PathBuf {
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(app_data).join("quick-switcher").join("config.json")
+}
+
+fn load_config() -> ShortcutConfig {
+    let path = get_config_path();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(config) = serde_json::from_str::<ShortcutConfig>(&content) {
+            return config;
+        }
+    }
+    ShortcutConfig::default()
+}
+
+fn save_config(config: &ShortcutConfig) {
+    let path = get_config_path();
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).unwrap_or_else(|_| {});
+        }
+    }
+    fs::write(&path, serde_json::to_string(config).unwrap_or_default()).unwrap_or_else(|_| {});
+}
+
+fn parse_modifiers(mods: &[String]) -> Option<Modifiers> {
+    let mut result = Modifiers::empty();
+    for mod_str in mods {
+        match mod_str.to_lowercase().as_str() {
+            "alt" => result |= Modifiers::ALT,
+            "ctrl" => result |= Modifiers::CONTROL,
+            "shift" => result |= Modifiers::SHIFT,
+            "win" | "super" | "meta" => result |= Modifiers::SUPER,
+            _ => {}
+        }
+    }
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+fn parse_key(key: &str) -> Option<Code> {
+    match key.to_lowercase().as_str() {
+        "space" => Some(Code::Space),
+        "a" => Some(Code::KeyA),
+        "b" => Some(Code::KeyB),
+        "c" => Some(Code::KeyC),
+        "d" => Some(Code::KeyD),
+        "e" => Some(Code::KeyE),
+        "f" => Some(Code::KeyF),
+        "g" => Some(Code::KeyG),
+        "h" => Some(Code::KeyH),
+        "i" => Some(Code::KeyI),
+        "j" => Some(Code::KeyJ),
+        "k" => Some(Code::KeyK),
+        "l" => Some(Code::KeyL),
+        "m" => Some(Code::KeyM),
+        "n" => Some(Code::KeyN),
+        "o" => Some(Code::KeyO),
+        "p" => Some(Code::KeyP),
+        "q" => Some(Code::KeyQ),
+        "r" => Some(Code::KeyR),
+        "s" => Some(Code::KeyS),
+        "t" => Some(Code::KeyT),
+        "u" => Some(Code::KeyU),
+        "v" => Some(Code::KeyV),
+        "w" => Some(Code::KeyW),
+        "x" => Some(Code::KeyX),
+        "y" => Some(Code::KeyY),
+        "z" => Some(Code::KeyZ),
+        "f1" => Some(Code::F1),
+        "f2" => Some(Code::F2),
+        "f3" => Some(Code::F3),
+        "f4" => Some(Code::F4),
+        "f5" => Some(Code::F5),
+        "f6" => Some(Code::F6),
+        "f7" => Some(Code::F7),
+        "f8" => Some(Code::F8),
+        "f9" => Some(Code::F9),
+        "f10" => Some(Code::F10),
+        "f11" => Some(Code::F11),
+        "f12" => Some(Code::F12),
+        _ => None,
+    }
 }
 
 /// Extract process name from a full path string.
@@ -162,8 +273,68 @@ fn hide_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn exit_app(app: tauri::AppHandle) {
-    app.exit(0);
+fn get_shortcut() -> ShortcutConfig {
+    SHORTCUT_CONFIG.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_shortcut(app: tauri::AppHandle, config: ShortcutConfig) -> Result<(), String> {
+    // Save to file
+    save_config(&config);
+
+    // Update global state
+    {
+        let mut stored = SHORTCUT_CONFIG.lock().unwrap();
+        *stored = config.clone();
+    }
+
+    // Re-register shortcut
+    let modifiers = parse_modifiers(&config.modifiers);
+    let key = parse_key(&config.key);
+
+    if let Some(code) = key {
+        let shortcut = Shortcut::new(modifiers, code);
+        // First unregister all shortcuts
+        if let Err(e) = app.global_shortcut().unregister_all() {
+            return Err(format!("Failed to unregister shortcuts: {}", e));
+        }
+        // Then register new shortcut
+        if let Err(e) = app.global_shortcut().register(shortcut) {
+            return Err(format!("Failed to register shortcut: {}", e));
+        }
+        Ok(())
+    } else {
+        Err("Invalid key".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_settings(app: tauri::AppHandle) {
+    // Check if settings window already exists
+    if app.get_webview_window("settings").is_none() {
+        WebviewWindowBuilder::new(
+            &app,
+            "settings",
+            WebviewUrl::App("index.html?settings".into()),
+        )
+        .title("Settings")
+        .inner_size(400.0, 500.0)
+        .resizable(false)
+        .decorations(true)
+        .build()
+        .unwrap();
+    } else {
+        let window = app.get_webview_window("settings").unwrap();
+        window.show().unwrap();
+        window.set_focus().unwrap();
+    }
+}
+
+#[tauri::command]
+fn close_settings(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.close().unwrap();
+    }
 }
 
 pub fn run() {
@@ -173,8 +344,9 @@ pub fn run() {
         .setup(|app| {
             // Create tray menu
             let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&show_item, &settings_item, &quit_item])?;
 
             // Build tray icon
             let _tray = TrayIconBuilder::new()
@@ -198,6 +370,25 @@ pub fn run() {
                             window.show().unwrap();
                             window.set_focus().unwrap();
                         }
+                        "settings" => {
+                            if app.get_webview_window("settings").is_none() {
+                                WebviewWindowBuilder::new(
+                                    app,
+                                    "settings",
+                                    WebviewUrl::App("index.html?settings".into()),
+                                )
+                                .title("Settings - Quick Switcher")
+                                .inner_size(400.0, 500.0)
+                                .resizable(false)
+                                .decorations(true)
+                                .build()
+                                .unwrap();
+                            } else {
+                                let window = app.get_webview_window("settings").unwrap();
+                                window.show().unwrap();
+                                window.set_focus().unwrap();
+                            }
+                        }
                         "quit" => {
                             app.exit(0);
                         }
@@ -206,33 +397,39 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Setup global shortcut
-            let shortcut = Shortcut::new(Some(Modifiers::ALT | Modifiers::CONTROL), Code::Space);
-            let app_handle = app.handle().clone();
+            // Setup global shortcut from config
+            let config = SHORTCUT_CONFIG.lock().unwrap().clone();
+            let modifiers = parse_modifiers(&config.modifiers);
+            let key = parse_key(&config.key);
 
-            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                // Only respond to key press, not release
-                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    let window = app_handle.get_webview_window("main").unwrap();
-                    if window.is_visible().unwrap() {
-                        window.hide().unwrap();
-                    } else {
-                        // Center the window on screen
-                        if let Some(screen) = window.primary_monitor().unwrap_or(None) {
-                            let screen_size = screen.size();
-                            let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
-                            let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
-                            let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
-                            window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                                x: x as i32,
-                                y: y as i32,
-                            })).unwrap();
+            if let Some(code) = key {
+                let shortcut = Shortcut::new(modifiers, code);
+                let app_handle = app.handle().clone();
+
+                app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    // Only respond to key press, not release
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let window = app_handle.get_webview_window("main").unwrap();
+                        if window.is_visible().unwrap() {
+                            window.hide().unwrap();
+                        } else {
+                            // Center the window on screen
+                            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+                                let screen_size = screen.size();
+                                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
+                                let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
+                                let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
+                                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                                    x: x as i32,
+                                    y: y as i32,
+                                })).unwrap();
+                            }
+                            window.show().unwrap();
+                            window.set_focus().unwrap();
                         }
-                        window.show().unwrap();
-                        window.set_focus().unwrap();
                     }
-                }
-            })?;
+                })?;
+            }
 
             #[cfg(debug_assertions)]
             {
@@ -241,7 +438,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_windows, search_windows, switch_window, hide_window, exit_app])
+        .invoke_handler(tauri::generate_handler![
+            get_windows,
+            search_windows,
+            switch_window,
+            hide_window,
+            get_shortcut,
+            set_shortcut,
+            open_settings,
+            close_settings
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

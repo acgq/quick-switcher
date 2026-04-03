@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Read(//c/code/**)",
+      "Bash(npm create:*)",
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "Bash(cargo check:*)",
+      "Bash(rustup update:*)",
+      "Bash(npm run:*)",
+      "Bash(npx tauri:*)",
+      "Bash(powershell -NoProfile -Command \"[System.Drawing.Bitmap]::new\\(512,512\\).Save\\('C:/code/quick-switcher/app-icon.png'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from PIL import Image, ImageDraw; img = Image.new\\('RGBA', \\(512, 512\\), \\(30, 30, 30, 255\\)\\); draw = ImageDraw.Draw\\(img\\); draw.rectangle\\([100, 100, 412, 412], fill=\\(100, 200, 255\\)\\); img.save\\('C:/code/quick-switcher/app-icon.png'\\)\")",
+      "Bash(cargo doc:*)",
+      "Bash(cargo tree:*)",
+      "Bash(curl -s http://localhost:1420)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill:*)",
+      "Bash(cargo test:*)",
+      "WebSearch",
+      "Bash(cargo info:*)"
+    ]
+  }
+}

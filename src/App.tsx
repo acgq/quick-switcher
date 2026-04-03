@@ -2,13 +2,30 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import './App.css'
 
+// Import settings component conditionally based on window label
+import Settings from './Settings'
+
 interface WindowInfo {
   id: number
   title: string
   process_name: string
 }
 
+interface ShortcutConfig {
+  modifiers: string[]
+  key: string
+}
+
+// Detect if this is the settings window
+const isSettingsWindow = window.location.search.includes('settings')
+
 function App() {
+  // Render settings page if this is settings window
+  if (isSettingsWindow) {
+    return <Settings />
+  }
+
+  // Main window switcher
   const [windows, setWindows] = useState<WindowInfo[]>([])
   const [filteredWindows, setFilteredWindows] = useState<WindowInfo[]>([])
   const [search, setSearch] = useState('')
