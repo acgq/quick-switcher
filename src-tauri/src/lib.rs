@@ -36,6 +36,64 @@ static SHORTCUT_CONFIG: LazyLock<Mutex<ShortcutConfig>> = LazyLock::new(|| {
     Mutex::new(load_config())
 });
 
+/// Center window on the monitor where mouse cursor is located
+fn center_window_on_mouse_monitor(window: &tauri::WebviewWindow) {
+    // Get cursor position
+    let cursor_pos = match window.cursor_position() {
+        Ok(pos) => pos,
+        Err(_) => {
+            // Fallback to primary monitor
+            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+                center_on_monitor(window, &screen);
+            }
+            return;
+        }
+    };
+
+    // Find the monitor containing the cursor
+    let monitors = match window.available_monitors() {
+        Ok(monitors) => monitors,
+        Err(_) => {
+            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+                center_on_monitor(window, &screen);
+            }
+            return;
+        }
+    };
+
+    // Find monitor that contains the cursor
+    for monitor in monitors {
+        let position = monitor.position();
+        let size = monitor.size();
+
+        // Check if cursor is within this monitor's bounds
+        if cursor_pos.x >= position.x as f64
+            && cursor_pos.x < (position.x + size.width as i32) as f64
+            && cursor_pos.y >= position.y as f64
+            && cursor_pos.y < (position.y + size.height as i32) as f64
+        {
+            center_on_monitor(window, &monitor);
+            return;
+        }
+    }
+
+    // Fallback to primary monitor
+    if let Some(screen) = window.primary_monitor().unwrap_or(None) {
+        center_on_monitor(window, &screen);
+    }
+}
+
+fn center_on_monitor(window: &tauri::WebviewWindow, monitor: &tauri::Monitor) {
+    let screen_size = monitor.size();
+    let screen_position = monitor.position();
+    let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
+
+    let x = screen_position.x + ((screen_size.width.saturating_sub(window_size.width)) / 2) as i32;
+    let y = screen_position.y + ((screen_size.height.saturating_sub(window_size.height)) / 2) as i32;
+
+    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+}
+
 fn get_config_path() -> PathBuf {
     let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(app_data).join("quick-switcher").join("config.json")
@@ -323,16 +381,7 @@ fn set_shortcut(app: tauri::AppHandle, config: ShortcutConfig) -> Result<(), Str
                 if window.is_visible().unwrap() {
                     window.hide().unwrap();
                 } else {
-                    if let Some(screen) = window.primary_monitor().unwrap_or(None) {
-                        let screen_size = screen.size();
-                        let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
-                        let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
-                        let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
-                        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                            x: x as i32,
-                            y: y as i32,
-                        })).unwrap();
-                    }
+                    center_window_on_mouse_monitor(&window);
                     window.show().unwrap();
                     window.set_focus().unwrap();
                     let _ = app_handle.emit("window-shown", ());
@@ -396,16 +445,7 @@ pub fn run() {
                     match event.id.as_ref() {
                         "show" => {
                             let window = app.get_webview_window("main").unwrap();
-                            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
-                                let screen_size = screen.size();
-                                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
-                                let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
-                                let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
-                                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                                    x: x as i32,
-                                    y: y as i32,
-                                })).unwrap();
-                            }
+                            center_window_on_mouse_monitor(&window);
                             window.show().unwrap();
                             window.set_focus().unwrap();
                             let _ = app.emit("window-shown", ());
@@ -453,17 +493,7 @@ pub fn run() {
                         if window.is_visible().unwrap() {
                             window.hide().unwrap();
                         } else {
-                            // Center the window on screen
-                            if let Some(screen) = window.primary_monitor().unwrap_or(None) {
-                                let screen_size = screen.size();
-                                let window_size = window.outer_size().unwrap_or(tauri::PhysicalSize { width: 600, height: 400 });
-                                let x = (screen_size.width.saturating_sub(window_size.width)) / 2;
-                                let y = (screen_size.height.saturating_sub(window_size.height)) / 2;
-                                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                                    x: x as i32,
-                                    y: y as i32,
-                                })).unwrap();
-                            }
+                            center_window_on_mouse_monitor(&window);
                             window.show().unwrap();
                             window.set_focus().unwrap();
                             // Emit event to clear search

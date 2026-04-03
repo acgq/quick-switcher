@@ -94,9 +94,9 @@ function App() {
   // Disable browser default shortcuts
   useEffect(() => {
     const blockBrowserShortcuts = (e: KeyboardEvent) => {
-      // Block common browser shortcuts
+      // Block common browser shortcuts (except n and p which we use for navigation)
       if (e.ctrlKey || e.metaKey) {
-        const blockedKeys = ['p', 's', 'f', 'r', 'w', 'd', 't', 'n', 'l', 'o']
+        const blockedKeys = ['s', 'f', 'r', 'w', 'd', 't', 'l', 'o']
         if (blockedKeys.includes(e.key.toLowerCase())) {
           e.preventDefault()
           e.stopPropagation()
@@ -121,6 +121,21 @@ function App() {
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+N: move down
+      if (e.ctrlKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        setSelectedIndex(prev =>
+          prev < filteredWindows.length - 1 ? prev + 1 : prev
+        )
+        return
+      }
+      // Ctrl+P: move up
+      if (e.ctrlKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        setSelectedIndex(prev => prev > 0 ? prev - 1 : prev)
+        return
+      }
+
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIndex(prev =>
