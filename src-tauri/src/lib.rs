@@ -239,6 +239,11 @@ mod platform {
 
         let process_name = get_process_name(process_id);
 
+        // Filter out Quick Switcher's own windows
+        if process_name.to_lowercase().contains("quick-switcher") {
+            return TRUE;
+        }
+
         windows.push(WindowInfo {
             id: hwnd.0 as usize,
             title: title_str,
