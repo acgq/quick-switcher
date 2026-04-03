@@ -27,6 +27,7 @@ function App() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // Load windows from backend
   const loadWindows = useCallback(() => {
@@ -45,6 +46,8 @@ function App() {
     setSearch('')
     setSelectedIndex(0)
     loadWindows()
+    // Focus input when window is shown
+    inputRef.current?.focus()
   }, [loadWindows])
 
   useEffect(() => {
@@ -163,6 +166,7 @@ function App() {
   return (
     <div className="container">
       <input
+        ref={inputRef}
         type="text"
         placeholder="Search windows... (supports pinyin)"
         value={search}

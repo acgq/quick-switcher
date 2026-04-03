@@ -25,7 +25,8 @@
       "Bash(taskkill:*)",
       "Bash(cargo test:*)",
       "WebSearch",
-      "Bash(cargo info:*)"
+      "Bash(cargo info:*)",
+      "Bash(grep -r \"WindowEvent\" ~/.cargo/registry/src/*/tauri-2*/src/*.rs)"
     ]
   }
 }

@@ -462,6 +462,15 @@ pub fn run() {
                 })?;
             }
 
+            // Hide window when it loses focus
+            let main_window = app.get_webview_window("main").unwrap();
+            let window_clone = main_window.clone();
+            main_window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    window_clone.hide().unwrap();
+                }
+            });
+
             #[cfg(debug_assertions)]
             {
                 let window = app.get_webview_window("main").unwrap();
