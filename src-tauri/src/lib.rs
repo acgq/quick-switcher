@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -15,6 +17,11 @@ pub struct WindowInfo {
     pub title: String,
     pub process_name: String,
 }
+
+// Global cache for window list, updated periodically in background
+static WINDOW_CACHE: LazyLock<Mutex<Vec<WindowInfo>>> = LazyLock::new(|| {
+    Mutex::new(Vec::new())
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutConfig {
@@ -319,17 +326,17 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::WindowInfo;
-    use cocoa::base::{id, nil, BOOL};
-    use cocoa::foundation::{NSString, NSInteger};
-    use objc::runtime::BOOL_TRUE;
-    use objc::{class, msg_send};
+    use objc::{class, msg_send, sel, sel_impl};
     use std::ffi::CStr;
+
+    // On macOS, BOOL is actually bool, so we use bool directly
+    type ObjcId = *mut objc::runtime::Object;
 
     pub fn get_windows() -> Vec<WindowInfo> {
         unsafe {
             // Use NSWorkspace to get running applications
-            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let apps: id = msg_send![workspace, runningApplications];
+            let workspace: ObjcId = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let apps: ObjcId = msg_send![workspace, runningApplications];
 
             if apps.is_null() {
                 return Vec::new();
@@ -339,31 +346,32 @@ mod platform {
             let mut windows = Vec::new();
 
             for i in 0..count {
-                let app: id = msg_send![apps, objectAtIndex: i];
+                let app: ObjcId = msg_send![apps, objectAtIndex: i];
 
-                // Skip hidden apps
-                let hidden: BOOL = msg_send![app, isHidden];
-                if hidden == BOOL_TRUE {
+                // Skip hidden apps (BOOL is bool on macOS)
+                let hidden: bool = msg_send![app, isHidden];
+                if hidden {
                     continue;
                 }
 
                 // Get app name
-                let name: id = msg_send![app, localizedName];
+                let name: ObjcId = msg_send![app, localizedName];
                 let process_name = nsstring_to_string(name);
 
-                // Filter out Quick Switcher
-                if process_name.to_lowercase().contains("quick switcher") {
+                // Filter out Quick Switcher (match both "Quick Switcher" and "quick-switcher")
+                let name_lower = process_name.to_lowercase();
+                if name_lower.contains("quick-switcher") {
                     continue;
                 }
 
                 // Get window title using AXUIElement (requires accessibility permission)
-                let pid: NSInteger = msg_send![app, processIdentifier];
-                let title = get_window_title_for_pid(pid as i32);
+                let pid: i32 = msg_send![app, processIdentifier];
+                let title = get_window_title_for_pid(pid);
 
                 if title.is_empty() {
                     // If no window title, use app name as fallback for apps with UI
                     // Check if app has UI (activation policy)
-                    let activation_policy: NSInteger = msg_send![app, activationPolicy];
+                    let activation_policy: i32 = msg_send![app, activationPolicy];
                     // NSApplicationActivationPolicyRegular = 0
                     if activation_policy != 0 {
                         continue;
@@ -386,7 +394,7 @@ mod platform {
         }
     }
 
-    unsafe fn nsstring_to_string(ns_str: id) -> String {
+    unsafe fn nsstring_to_string(ns_str: ObjcId) -> String {
         if ns_str.is_null() {
             return String::new();
         }
@@ -406,16 +414,17 @@ mod platform {
 
         // Get the focused window
         let mut window: *mut std::ffi::c_void = std::ptr::null_mut();
-        let attr_name = CFStringCreateWithCStringNoCopy(
+        let attr_name = CFStringCreateWithCString(
             std::ptr::null_mut(),
             "AXFocusedWindow\0".as_ptr() as *const i8,
             0x08000100, // kCFStringEncodingUTF8
-            std::ptr::null_mut(),
         );
 
         let result = AXUIElementCopyAttributeValue(app_element, attr_name, &mut window);
         CFRelease(app_element);
-        CFRelease(attr_name);
+        if !attr_name.is_null() {
+            CFRelease(attr_name);
+        }
 
         if result != 0 || window.is_null() {
             return String::new();
@@ -423,16 +432,17 @@ mod platform {
 
         // Get window title
         let mut title: *mut std::ffi::c_void = std::ptr::null_mut();
-        let title_attr = CFStringCreateWithCStringNoCopy(
+        let title_attr = CFStringCreateWithCString(
             std::ptr::null_mut(),
             "AXTitle\0".as_ptr() as *const i8,
             0x08000100,
-            std::ptr::null_mut(),
         );
 
         let result = AXUIElementCopyAttributeValue(window, title_attr, &mut title);
         CFRelease(window);
-        CFRelease(title_attr);
+        if !title_attr.is_null() {
+            CFRelease(title_attr);
+        }
 
         if result != 0 || title.is_null() {
             return String::new();
@@ -448,6 +458,7 @@ mod platform {
     }
 
     // CoreFoundation / Accessibility externs
+    #[repr(C)]
     struct CFRange {
         location: isize,
         length: isize,
@@ -460,11 +471,10 @@ mod platform {
             attribute: *mut std::ffi::c_void,
             value: *mut *mut std::ffi::c_void,
         ) -> i32;
-        fn CFStringCreateWithCStringNoCopy(
+        fn CFStringCreateWithCString(
             alloc: *mut std::ffi::c_void,
             c_str: *const i8,
             encoding: u32,
-            deallocator: *mut std::ffi::c_void,
         ) -> *mut std::ffi::c_void;
         fn CFStringGetLength(cf_str: *mut std::ffi::c_void) -> isize;
         fn CFStringGetCharacters(cf_str: *mut std::ffi::c_void, range: CFRange, buffer: *mut u16);
@@ -473,8 +483,8 @@ mod platform {
 
     pub fn switch_window(window_id: usize) {
         unsafe {
-            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let apps: id = msg_send![workspace, runningApplications];
+            let workspace: ObjcId = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let apps: ObjcId = msg_send![workspace, runningApplications];
 
             if apps.is_null() {
                 return;
@@ -483,8 +493,8 @@ mod platform {
             let count: usize = msg_send![apps, count];
 
             for i in 0..count {
-                let app: id = msg_send![apps, objectAtIndex: i];
-                let pid: NSInteger = msg_send![app, processIdentifier];
+                let app: ObjcId = msg_send![apps, objectAtIndex: i];
+                let pid: i32 = msg_send![app, processIdentifier];
 
                 if pid as usize == window_id {
                     // NSApplicationActivateIgnoringOtherApps = 1 << 1
@@ -505,7 +515,44 @@ mod platform {
 
 #[tauri::command]
 fn get_windows() -> Vec<WindowInfo> {
-    platform::get_windows()
+    // Return cached windows immediately (non-blocking)
+    WINDOW_CACHE.lock().unwrap().clone()
+}
+
+/// Start background thread to periodically update window cache
+fn start_window_cache_updater(app_handle: tauri::AppHandle) {
+    thread::spawn(move || {
+        let mut last_windows: Vec<WindowInfo> = Vec::new();
+
+        loop {
+            // Update cache
+            let windows = platform::get_windows();
+
+            // Check if data actually changed (compare id and title)
+            let changed = windows.len() != last_windows.len() ||
+                windows.iter().zip(last_windows.iter()).any(|(a, b)| {
+                    a.id != b.id || a.title != b.title || a.process_name != b.process_name
+                });
+
+            if changed {
+                {
+                    let mut cache = WINDOW_CACHE.lock().unwrap();
+                    *cache = windows.clone();
+                }
+                last_windows = windows.clone();
+
+                // Notify frontend if main window is visible
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = app_handle.emit("windows-updated", windows);
+                    }
+                }
+            }
+
+            // Update every 5000ms
+            thread::sleep(Duration::from_millis(5000));
+        }
+    });
 }
 
 #[tauri::command]
@@ -630,6 +677,9 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // Start background window cache updater
+            start_window_cache_updater(app.handle().clone());
+
             // Create tray menu
             let show_item = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
@@ -712,11 +762,12 @@ pub fn run() {
                 }
             });
 
-            #[cfg(debug_assertions)]
-            {
-                let window = app.get_webview_window("main").unwrap();
-                window.open_devtools();
-            }
+            // DevTools disabled - uncomment below to enable in debug mode
+            // #[cfg(debug_assertions)]
+            // {
+            //     let window = app.get_webview_window("main").unwrap();
+            //     window.open_devtools();
+            // }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

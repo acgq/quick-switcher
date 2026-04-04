@@ -12,10 +12,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 技术栈
 
-- **后端**: Rust + Tauri
-- **前端**: React + TypeScript
-- **样式**: TailwindCSS
-- **状态管理**: Zustand
+- **后端**: Rust + Tauri 2
+- **前端**: React 19 + TypeScript + Vite
+- **样式**: CSS（无框架）
+- **拼音**: pinyin crate（Rust）
 
 ## 常用命令
 
@@ -40,31 +40,27 @@ cargo test
 ## 架构
 
 ```
-src/
-├── tauri/                # Rust 后端
-│   ├── main.rs
-│   ├── window_manager/  # 窗口管理模块（跨平台）
-│   ├── hotkey/          # 全局快捷键
-│   ├── search/          # 搜索与匹配
-│   └── models/          # 数据结构
-│
-├── frontend/            # 前端 UI
-│   ├── components/
-│   ├── hooks/
-│   ├── store/
-│   └── pages/
+src-tauri/
+├── src/
+│   ├── main.rs           # 入口，调用 lib.rs
+│   ├── lib.rs            # 主逻辑 + 平台模块（platform 模块内含 Windows/macOS/Linux 实现）
+│   └── search.rs         # 搜索匹配（拼音、模糊匹配、评分）
+
+src/                      # 前端
+├── App.tsx               # 主窗口组件（窗口列表、搜索、键盘导航）
+├── App.css               # 主窗口样式
+├── Settings.tsx          # 设置页面（快捷键配置）
+└── Settings.css          # 设置页面样式
 ```
+
+### 关键设计
+
+- **平台模块**: `lib.rs` 内嵌 `platform` 模块，通过 `#[cfg(target_os)]` 条件编译实现跨平台
+- **搜索逻辑**: `search.rs` 支持直接匹配、拼音全拼、拼音首字母、模糊匹配，按评分排序
+- **前端通信**: 通过 Tauri `invoke` 调用后端命令（`get_windows`, `search_windows`, `switch_window`）
 
 ## 代码风格
 
 - 实用主义，解决实际问题，不写假想需求的代码
 - 函数短小精悍，只做一件事
-- 写完代码顺便写测试
 - 语言：用中文表达，代码注释用英文
-
-## 开发阶段
-
-1. **Phase 1**: 快捷键呼出 + 窗口列表 + 点击切换
-2. **Phase 2**: 输入过滤 + 键盘操作
-3. **Phase 3**: 拼音搜索 + 模糊匹配 + LRU 排序
-4. **Phase 4**: UI 动画 + 历史权重
