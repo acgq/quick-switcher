@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import './Settings.css'
 
 interface ShortcutConfig {
@@ -13,10 +14,13 @@ function Settings() {
   const [tempShortcut, setTempShortcut] = useState<string>('')
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const [autostart, setAutostart] = useState(false)
+  const [autostartError, setAutostartError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     loadShortcut()
+    loadAutostart()
   }, [])
 
   // Keyboard capture when recording
@@ -69,6 +73,19 @@ function Settings() {
     }
   }
 
+  async function loadAutostart() {
+    try {
+      console.log('loading autostart status...')
+      const enabled = await isEnabled()
+      console.log('autostart status:', enabled)
+      setAutostart(enabled)
+      setAutostartError('')
+    } catch (e) {
+      console.error('Failed to load autostart:', e)
+      setAutostartError(`Load failed: ${e}`)
+    }
+  }
+
   async function saveShortcut() {
     if (shortcut.modifiers.length === 0 || !shortcut.key) {
       setError('Please set a valid shortcut')
@@ -82,6 +99,29 @@ function Settings() {
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
       setError(`Failed to save: ${e}`)
+    }
+  }
+
+  async function toggleAutostart() {
+    console.log('toggleAutostart called, current state:', autostart)
+    const newValue = !autostart
+    console.log('trying to set autostart to:', newValue)
+    try {
+      if (newValue) {
+        console.log('calling enable()')
+        await enable()
+        console.log('enable() succeeded')
+      } else {
+        console.log('calling disable()')
+        await disable()
+        console.log('disable() succeeded')
+      }
+      setAutostart(newValue)
+      setAutostartError('')
+      console.log('state updated to:', newValue)
+    } catch (e) {
+      console.error('Failed to set autostart:', e)
+      setAutostartError(`Toggle failed: ${e}`)
     }
   }
 
@@ -110,8 +150,25 @@ function Settings() {
 
       <div className="setting-row">
         <div className="setting-label">
+          <span className="label-text">Launch at Startup</span>
+          <span className="label-hint">Automatically start when you log in</span>
+        </div>
+        <div className="setting-value">
+          <div
+            className={`toggle-switch ${autostart ? 'active' : ''}`}
+            onClick={toggleAutostart}
+          >
+            <span className="toggle-slider"></span>
+          </div>
+        </div>
+      </div>
+
+      {autostartError && <div className="error-message">{autostartError}</div>}
+
+      <div className="setting-row">
+        <div className="setting-label">
           <span className="label-text">Global Shortcut</span>
-          <span className="label-hint">Press the key combination you want to use</span>
+          <span className="label-hint">Press the key combination to toggle the window</span>
         </div>
         <div className="setting-value">
           <input
@@ -133,16 +190,6 @@ function Settings() {
               Cancel
             </button>
           )}
-        </div>
-      </div>
-
-      <div className="setting-row">
-        <div className="setting-label">
-          <span className="label-text">Current Shortcut</span>
-          <span className="label-hint">The active keyboard shortcut</span>
-        </div>
-        <div className="setting-value">
-          <span className="current-shortcut">{formatShortcut(shortcut) || 'Not set'}</span>
         </div>
       </div>
 
