@@ -10,7 +10,71 @@ pub fn to_pinyin_initials(text: &str) -> String {
     to_pinyin_vec(text, |p: Pinyin| p.first_letter()).join("")
 }
 
-/// Check if query matches text (supports pinyin)
+/// Fuzzy match: check if query chars appear in text in order (allowing skips)
+/// e.g., "taui" matches "tauri" because t-a-u-i all appear in sequence
+pub fn fuzzy_match(text: &str, query: &str) -> bool {
+    let text_chars: Vec<char> = text.to_lowercase().chars().collect();
+    let query_chars: Vec<char> = query.to_lowercase().chars().collect();
+
+    if query_chars.is_empty() {
+        return true;
+    }
+    if text_chars.is_empty() {
+        return false;
+    }
+
+    let mut query_idx = 0;
+    for text_char in text_chars {
+        if text_char == query_chars[query_idx] {
+            query_idx += 1;
+            if query_idx >= query_chars.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Calculate fuzzy match score (higher = better match, fewer skips = better)
+pub fn fuzzy_match_score(text: &str, query: &str) -> i32 {
+    let text_chars: Vec<char> = text.to_lowercase().chars().collect();
+    let query_chars: Vec<char> = query.to_lowercase().chars().collect();
+
+    if query_chars.is_empty() {
+        return 0;
+    }
+
+    let mut query_idx = 0;
+    let mut matched_positions: Vec<usize> = Vec::new();
+
+    for (i, text_char) in text_chars.iter().enumerate() {
+        if query_idx < query_chars.len() && *text_char == query_chars[query_idx] {
+            matched_positions.push(i);
+            query_idx += 1;
+        }
+    }
+
+    if query_idx < query_chars.len() {
+        return 0; // Not all query chars matched
+    }
+
+    // Score based on match quality:
+    // - More matched chars = better
+    // - Earlier first match = better
+    // - Fewer gaps between matches = better
+    let matched_count = matched_positions.len() as i32;
+    let first_pos = *matched_positions.first().unwrap_or(&0) as i32;
+    let gaps = if matched_positions.len() > 1 {
+        matched_positions.windows(2).map(|w| (w[1] - w[0]) as i32 - 1).sum::<i32>()
+    } else {
+        0
+    };
+
+    // Base score for matching all chars, minus penalty for gaps and late start
+    40 + matched_count * 5 - gaps * 2 - first_pos.min(10)
+}
+
+/// Check if query matches text (supports pinyin and fuzzy match)
 pub fn matches(text: &str, query: &str) -> bool {
     let text_lower = text.to_lowercase();
     let query_lower = query.to_lowercase();
@@ -18,6 +82,13 @@ pub fn matches(text: &str, query: &str) -> bool {
     // Direct substring match
     if text_lower.contains(&query_lower) {
         return true;
+    }
+
+    // Fuzzy match for non-Chinese query
+    if !contains_chinese(query) {
+        if fuzzy_match(text, query) {
+            return true;
+        }
     }
 
     // Pinyin full match
@@ -35,6 +106,11 @@ pub fn matches(text: &str, query: &str) -> bool {
     false
 }
 
+/// Check if string contains Chinese characters
+fn contains_chinese(s: &str) -> bool {
+    s.chars().any(|c| c >= '\u{4E00}' && c <= '\u{9FFF}')
+}
+
 /// Calculate match score (higher = better match)
 pub fn match_score(text: &str, query: &str) -> i32 {
     let text_lower = text.to_lowercase();
@@ -48,6 +124,14 @@ pub fn match_score(text: &str, query: &str) -> i32 {
     // Direct substring match
     if text_lower.contains(&query_lower) {
         return 80 + query.len() as i32;
+    }
+
+    // Fuzzy match (for non-Chinese query)
+    if !contains_chinese(query) {
+        let fuzzy_score = fuzzy_match_score(text, query);
+        if fuzzy_score > 0 {
+            return fuzzy_score;
+        }
     }
 
     // Pinyin full prefix match
@@ -125,5 +209,41 @@ mod tests {
     #[test]
     fn test_match_score_pinyin() {
         assert!(match_score("微信", "weixin") > match_score("微信", "wx"));
+    }
+
+    // Fuzzy match tests
+    #[test]
+    fn test_fuzzy_match_basic() {
+        assert!(fuzzy_match("tauri", "taui"));
+        assert!(fuzzy_match("chrome", "chre"));
+        assert!(fuzzy_match("visual studio", "vstu"));
+    }
+
+    #[test]
+    fn test_fuzzy_match_no_match() {
+        assert!(!fuzzy_match("tauri", "tuxi")); // 'x' not in tauri
+        assert!(!fuzzy_match("chrome", "chrz")); // 'z' not in chrome
+    }
+
+    #[test]
+    fn test_matches_fuzzy() {
+        assert!(matches("Tauri App", "taui"));
+        assert!(matches("Chrome Browser", "chre"));
+    }
+
+    #[test]
+    fn test_fuzzy_match_score() {
+        // Exact sequence should score higher than fuzzy
+        assert!(match_score("tauri", "tauri") > match_score("tauri", "taui"));
+        // Fewer gaps = higher score
+        assert!(fuzzy_match_score("tauri", "taui") > fuzzy_match_score("tauri", "ti"));
+    }
+
+    #[test]
+    fn test_contains_chinese() {
+        assert!(contains_chinese("微信"));
+        assert!(contains_chinese("abc微信def"));
+        assert!(!contains_chinese("chrome"));
+        assert!(!contains_chinese(""));
     }
 }

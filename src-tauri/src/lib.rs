@@ -199,13 +199,13 @@ mod platform {
     use super::WindowInfo;
     use super::extract_process_name_from_path;
     use windows_core::BOOL;
-    use windows::Win32::Foundation::{HWND, LPARAM, CloseHandle, TRUE};
+    use windows::Win32::Foundation::{HWND, LPARAM, CloseHandle, RECT, TRUE};
     use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId,
-        IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SwitchToThisWindow,
-        SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED,
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, GetWindowRect,
+        GetWindowLongPtrW, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SwitchToThisWindow,
+        GWL_EXSTYLE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, WS_EX_TOOLWINDOW,
     };
 
     pub fn get_windows() -> Vec<WindowInfo> {
@@ -219,24 +219,42 @@ mod platform {
     unsafe extern "system" fn enum_windows_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let windows = &mut *(lparam.0 as *mut Vec<WindowInfo>);
 
+        // Must be visible
         if !IsWindowVisible(hwnd).as_bool() {
             return TRUE;
         }
 
+        // Must have a title
         let mut title = [0u16; 512];
         let len = GetWindowTextW(hwnd, &mut title);
         if len == 0 {
             return TRUE;
         }
-
         let title_str = String::from_utf16_lossy(&title[..len as usize]);
         if title_str.is_empty() {
             return TRUE;
         }
 
+        // Filter out tool windows (WS_EX_TOOLWINDOW)
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if (ex_style & WS_EX_TOOLWINDOW.0 as isize) != 0 {
+            return TRUE;
+        }
+
+        // Filter out windows with zero size
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return TRUE;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return TRUE;
+        }
+
+        // Get process info
         let mut process_id: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-
         let process_name = get_process_name(process_id);
 
         // Filter out Quick Switcher's own windows
