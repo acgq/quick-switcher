@@ -319,8 +319,181 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::WindowInfo;
-    pub fn get_windows() -> Vec<WindowInfo> { vec![] }
-    pub fn switch_window(_id: usize) {}
+    use cocoa::base::{id, nil, BOOL};
+    use cocoa::foundation::{NSString, NSInteger};
+    use objc::runtime::BOOL_TRUE;
+    use objc::{class, msg_send};
+    use std::ffi::CStr;
+
+    pub fn get_windows() -> Vec<WindowInfo> {
+        unsafe {
+            // Use NSWorkspace to get running applications
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let apps: id = msg_send![workspace, runningApplications];
+
+            if apps.is_null() {
+                return Vec::new();
+            }
+
+            let count: usize = msg_send![apps, count];
+            let mut windows = Vec::new();
+
+            for i in 0..count {
+                let app: id = msg_send![apps, objectAtIndex: i];
+
+                // Skip hidden apps
+                let hidden: BOOL = msg_send![app, isHidden];
+                if hidden == BOOL_TRUE {
+                    continue;
+                }
+
+                // Get app name
+                let name: id = msg_send![app, localizedName];
+                let process_name = nsstring_to_string(name);
+
+                // Filter out Quick Switcher
+                if process_name.to_lowercase().contains("quick switcher") {
+                    continue;
+                }
+
+                // Get window title using AXUIElement (requires accessibility permission)
+                let pid: NSInteger = msg_send![app, processIdentifier];
+                let title = get_window_title_for_pid(pid as i32);
+
+                if title.is_empty() {
+                    // If no window title, use app name as fallback for apps with UI
+                    // Check if app has UI (activation policy)
+                    let activation_policy: NSInteger = msg_send![app, activationPolicy];
+                    // NSApplicationActivationPolicyRegular = 0
+                    if activation_policy != 0 {
+                        continue;
+                    }
+                    windows.push(WindowInfo {
+                        id: pid as usize,
+                        title: process_name.clone(),
+                        process_name,
+                    });
+                } else {
+                    windows.push(WindowInfo {
+                        id: pid as usize,
+                        title,
+                        process_name,
+                    });
+                }
+            }
+
+            windows
+        }
+    }
+
+    unsafe fn nsstring_to_string(ns_str: id) -> String {
+        if ns_str.is_null() {
+            return String::new();
+        }
+        let bytes: *const i8 = msg_send![ns_str, UTF8String];
+        if bytes.is_null() {
+            return String::new();
+        }
+        CStr::from_ptr(bytes).to_string_lossy().into_owned()
+    }
+
+    unsafe fn get_window_title_for_pid(pid: i32) -> String {
+        // Create AXUIElement for the application
+        let app_element = AXUIElementCreateApplication(pid);
+        if app_element.is_null() {
+            return String::new();
+        }
+
+        // Get the focused window
+        let mut window: *mut std::ffi::c_void = std::ptr::null_mut();
+        let attr_name = CFStringCreateWithCStringNoCopy(
+            std::ptr::null_mut(),
+            "AXFocusedWindow\0".as_ptr() as *const i8,
+            0x08000100, // kCFStringEncodingUTF8
+            std::ptr::null_mut(),
+        );
+
+        let result = AXUIElementCopyAttributeValue(app_element, attr_name, &mut window);
+        CFRelease(app_element);
+        CFRelease(attr_name);
+
+        if result != 0 || window.is_null() {
+            return String::new();
+        }
+
+        // Get window title
+        let mut title: *mut std::ffi::c_void = std::ptr::null_mut();
+        let title_attr = CFStringCreateWithCStringNoCopy(
+            std::ptr::null_mut(),
+            "AXTitle\0".as_ptr() as *const i8,
+            0x08000100,
+            std::ptr::null_mut(),
+        );
+
+        let result = AXUIElementCopyAttributeValue(window, title_attr, &mut title);
+        CFRelease(window);
+        CFRelease(title_attr);
+
+        if result != 0 || title.is_null() {
+            return String::new();
+        }
+
+        // Convert CFString to Rust String
+        let length = CFStringGetLength(title);
+        let mut buffer = vec![0u16; length as usize + 1];
+        CFStringGetCharacters(title, CFRange { location: 0, length }, buffer.as_mut_ptr());
+        CFRelease(title);
+
+        String::from_utf16_lossy(&buffer[..length as usize])
+    }
+
+    // CoreFoundation / Accessibility externs
+    struct CFRange {
+        location: isize,
+        length: isize,
+    }
+
+    extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> *mut std::ffi::c_void;
+        fn AXUIElementCopyAttributeValue(
+            element: *mut std::ffi::c_void,
+            attribute: *mut std::ffi::c_void,
+            value: *mut *mut std::ffi::c_void,
+        ) -> i32;
+        fn CFStringCreateWithCStringNoCopy(
+            alloc: *mut std::ffi::c_void,
+            c_str: *const i8,
+            encoding: u32,
+            deallocator: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        fn CFStringGetLength(cf_str: *mut std::ffi::c_void) -> isize;
+        fn CFStringGetCharacters(cf_str: *mut std::ffi::c_void, range: CFRange, buffer: *mut u16);
+        fn CFRelease(cf: *mut std::ffi::c_void);
+    }
+
+    pub fn switch_window(window_id: usize) {
+        unsafe {
+            let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let apps: id = msg_send![workspace, runningApplications];
+
+            if apps.is_null() {
+                return;
+            }
+
+            let count: usize = msg_send![apps, count];
+
+            for i in 0..count {
+                let app: id = msg_send![apps, objectAtIndex: i];
+                let pid: NSInteger = msg_send![app, processIdentifier];
+
+                if pid as usize == window_id {
+                    // NSApplicationActivateIgnoringOtherApps = 1 << 1
+                    let _: () = msg_send![app, activateWithOptions: 2];
+                    break;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
