@@ -13,7 +13,7 @@ mod search;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
-    pub id: usize,
+    pub id: String,  // Use string ID to avoid JavaScript number precision issues
     pub title: String,
     pub process_name: String,
 }
@@ -270,7 +270,7 @@ mod platform {
         }
 
         windows.push(WindowInfo {
-            id: hwnd.0 as usize,
+            id: (hwnd.0 as usize).to_string(),
             title: title_str,
             process_name,
         });
@@ -377,13 +377,13 @@ mod platform {
                         continue;
                     }
                     windows.push(WindowInfo {
-                        id: pid as usize,
+                        id: (pid as usize).to_string(),
                         title: process_name.clone(),
                         process_name,
                     });
                 } else {
                     windows.push(WindowInfo {
-                        id: pid as usize,
+                        id: (pid as usize).to_string(),
                         title,
                         process_name,
                     });
@@ -509,8 +509,455 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::WindowInfo;
-    pub fn get_windows() -> Vec<WindowInfo> { vec![] }
-    pub fn switch_window(_id: usize) {}
+    use std::fs;
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum DisplayServer {
+        X11,
+        Wayland,
+    }
+
+    fn detect_display_server() -> DisplayServer {
+        if std::env::var("WAYLAND_DISPLAY").is_ok()
+            || std::env::var("XDG_SESSION_TYPE")
+                .map(|v| v == "wayland")
+                .unwrap_or(false)
+        {
+            DisplayServer::Wayland
+        } else {
+            DisplayServer::X11
+        }
+    }
+
+    /// Extract process name from /proc/{pid}/comm or /proc/{pid}/cmdline
+    fn get_process_name_from_pid(pid: u32) -> String {
+        // Try /proc/{pid}/comm first (shorter name)
+        let comm_path = format!("/proc/{}/comm", pid);
+        if let Ok(name) = fs::read_to_string(&comm_path) {
+            return name.trim().to_string();
+        }
+
+        // Fallback to /proc/{pid}/cmdline
+        let cmdline_path = format!("/proc/{}/cmdline", pid);
+        if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
+            // cmdline is null-separated, get first argument
+            let first_arg = cmdline.split('\0').next().unwrap_or("");
+            // Extract just the executable name from path
+            first_arg
+                .rsplit('/')
+                .next()
+                .unwrap_or(first_arg)
+                .to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    mod x11_backend {
+        use super::super::WindowInfo;
+        use super::get_process_name_from_pid;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::*;
+        use x11rb::rust_connection::RustConnection;
+        use x11rb::x11_utils::Serialize;
+        use x11rb::CURRENT_TIME;
+
+        // X11 ANY atom value (0 means any type)
+        const ANY_ATOM: Atom = 0;
+
+        const _NET_CLIENT_LIST: &str = "_NET_CLIENT_LIST";
+        const _NET_WM_NAME: &str = "_NET_WM_NAME";
+        const _NET_WM_PID: &str = "_NET_WM_PID";
+        const _NET_ACTIVE_WINDOW: &str = "_NET_ACTIVE_WINDOW";
+
+        pub fn get_windows() -> Vec<WindowInfo> {
+            let (conn, screen_num) = match RustConnection::connect(None) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[X11] Connection failed: {:?}", e);
+                    return Vec::new();
+                }
+            };
+
+            let screen = match conn.setup().roots.get(screen_num) {
+                Some(s) => s,
+                None => return Vec::new(),
+            };
+            let root = screen.root;
+
+            // Get _NET_CLIENT_LIST atom
+            let client_list_atom = match conn.intern_atom(false, _NET_CLIENT_LIST.as_bytes()) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply.atom,
+                    Err(_) => return Vec::new(),
+                },
+                Err(_) => return Vec::new(),
+            };
+
+            // Get _NET_WM_NAME atom
+            let wm_name_atom = match conn.intern_atom(false, _NET_WM_NAME.as_bytes()) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply.atom,
+                    Err(_) => 0,
+                },
+                Err(_) => 0,
+            };
+
+            // Get _NET_WM_PID atom
+            let wm_pid_atom = match conn.intern_atom(false, _NET_WM_PID.as_bytes()) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply.atom,
+                    Err(_) => 0,
+                },
+                Err(_) => 0,
+            };
+
+            // Get CARDINAL atom for PID property type
+            let cardinal_atom = AtomEnum::CARDINAL.into();
+
+            // Get client list - use ANY_ATOM (0) for type
+            let client_list_cookie = conn
+                .get_property(false, root, client_list_atom, ANY_ATOM, 0, 1024);
+            let client_list = match client_list_cookie {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply,
+                    Err(e) => {
+                        eprintln!("[X11] Failed to get client list reply: {:?}", e);
+                        return Vec::new();
+                    }
+                },
+                Err(e) => {
+                    eprintln!("[X11] Failed to get client list: {:?}", e);
+                    return Vec::new();
+                }
+            };
+
+            eprintln!("[X11] Found {} windows", client_list.value32().map(|i| i.count()).unwrap_or(0));
+
+            let windows: Vec<Window> = client_list
+                .value32()
+                .map(|iter| iter.collect())
+                .unwrap_or_default();
+
+            let mut result = Vec::new();
+
+            for window in windows {
+                // Get window title
+                let title = get_window_title(&conn, window, wm_name_atom);
+
+                // Skip windows with empty titles
+                if title.is_empty() {
+                    continue;
+                }
+
+                // Get process ID
+                let pid = get_window_pid(&conn, window, wm_pid_atom, cardinal_atom);
+                let process_name = if pid > 0 {
+                    get_process_name_from_pid(pid)
+                } else {
+                    String::new()
+                };
+
+                // Filter out Quick Switcher's own windows
+                if process_name.to_lowercase().contains("quick-switcher") {
+                    continue;
+                }
+
+                result.push(WindowInfo {
+                    id: (window as usize).to_string(),
+                    title,
+                    process_name,
+                });
+            }
+
+            result
+        }
+
+        fn get_window_title(conn: &RustConnection, window: Window, wm_name_atom: Atom) -> String {
+            // Try _NET_WM_NAME first (UTF-8)
+            if wm_name_atom != 0 {
+                let prop = conn.get_property(false, window, wm_name_atom, ANY_ATOM, 0, 1024);
+                if let Ok(cookie) = prop {
+                    if let Ok(reply) = cookie.reply() {
+                        if !reply.value.is_empty() {
+                            // _NET_WM_NAME is UTF-8 string
+                            return String::from_utf8_lossy(&reply.value).into_owned();
+                        }
+                    }
+                }
+            }
+
+            // Fallback to WM_NAME (compound text or string)
+            let wm_name: Atom = AtomEnum::WM_NAME.into();
+            let prop = conn.get_property(false, window, wm_name, ANY_ATOM, 0, 1024);
+            if let Ok(cookie) = prop {
+                if let Ok(reply) = cookie.reply() {
+                    if !reply.value.is_empty() {
+                        return String::from_utf8_lossy(&reply.value).into_owned();
+                    }
+                }
+            }
+
+            String::new()
+        }
+
+        fn get_window_pid(conn: &RustConnection, window: Window, wm_pid_atom: Atom, cardinal_atom: Atom) -> u32 {
+            if wm_pid_atom == 0 {
+                return 0;
+            }
+
+            let prop = conn.get_property(false, window, wm_pid_atom, cardinal_atom, 0, 1);
+            if let Ok(cookie) = prop {
+                if let Ok(reply) = cookie.reply() {
+                    if let Some(pid) = reply.value32().and_then(|mut iter| iter.next()) {
+                        return pid;
+                    }
+                }
+            }
+
+            0
+        }
+
+        pub fn switch_window(window_id: usize) {
+            let (conn, screen_num) = match RustConnection::connect(None) {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            let screen = match conn.setup().roots.get(screen_num) {
+                Some(s) => s,
+                None => return,
+            };
+            let root = screen.root;
+            let window = window_id as Window;
+
+            // Get _NET_ACTIVE_WINDOW atom
+            let active_window_atom = match conn.intern_atom(false, _NET_ACTIVE_WINDOW.as_bytes()) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(reply) => reply.atom,
+                    Err(_) => return,
+                },
+                Err(_) => return,
+            };
+
+            // Send _NET_ACTIVE_WINDOW client message
+            let event = ClientMessageEvent {
+                response_type: CLIENT_MESSAGE_EVENT,
+                sequence: 0,
+                format: 32,
+                window,
+                type_: active_window_atom,
+                data: [2u32, 0, 0, 0, 0].into(), // source=2 (user), timestamp=0
+            };
+
+            // Send event with SubstructureRedirectMask | SubstructureNotifyMask
+            let _ = conn.send_event(
+                false,
+                root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                event.serialize(),
+            );
+
+            let _ = conn.flush();
+
+            // Also try XSetInputFocus as fallback
+            let _ = conn.set_input_focus(InputFocus::POINTER_ROOT, window, CURRENT_TIME);
+            let _ = conn.flush();
+        }
+    }
+
+    mod wayland_backend {
+        use super::super::WindowInfo;
+        use std::process::Command;
+
+        /// Get windows via kdotool (KDE Wayland)
+        pub fn get_windows() -> Option<Vec<WindowInfo>> {
+            // Try kdotool first (for KDE Wayland)
+            if let Some(windows) = get_windows_kdotool() {
+                return Some(windows);
+            }
+
+            None
+        }
+
+        /// Use kdotool to get window list on KDE Wayland
+        fn get_windows_kdotool() -> Option<Vec<WindowInfo>> {
+            // kdotool path - check multiple locations
+            let kdotool_paths = [
+                "/usr/local/bin/kdotool",
+                "/usr/bin/kdotool",
+                "bin/kdotool",  // Relative to src-tauri directory
+                "../bin/kdotool",  // Relative to project root
+            ];
+
+            let kdotool = kdotool_paths.iter()
+                .find(|path| std::path::Path::new(path).exists())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "kdotool".to_string());
+
+            // Get all window IDs
+            let output = match Command::new(&kdotool)
+                .args(["search", "--name", ".*"])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    eprintln!("[kdotool] Failed to execute: {:?}", e);
+                    return None;
+                }
+            };
+
+            if !output.status.success() {
+                eprintln!("[kdotool] Command failed");
+                return None;
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let window_ids: Vec<&str> = stdout.lines().collect();
+
+            eprintln!("[kdotool] Found {} windows", window_ids.len());
+
+            let mut windows = Vec::new();
+
+            for id in window_ids {
+                let id = id.trim();
+                if id.is_empty() {
+                    continue;
+                }
+
+                // Get window name
+                let name_output = Command::new(&kdotool)
+                    .args(["getwindowname", id])
+                    .output()
+                    .ok();
+
+                let name = name_output
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+
+                // Get window class name
+                let class_output = Command::new(&kdotool)
+                    .args(["getwindowclassname", id])
+                    .output()
+                    .ok();
+
+                let class_name = class_output
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+
+                // Skip windows with empty names (like plasmashell panels)
+                if name.is_empty() {
+                    continue;
+                }
+
+                // Filter out Quick Switcher's own windows
+                if class_name.to_lowercase().contains("quick-switcher") {
+                    continue;
+                }
+
+                // Use UUID string directly as ID (to avoid JavaScript number precision issues)
+                let window_id = id.to_string();
+
+                windows.push(WindowInfo {
+                    id: window_id,
+                    title: name,
+                    process_name: class_name,
+                });
+            }
+
+            if windows.is_empty() {
+                None
+            } else {
+                Some(windows)
+            }
+        }
+
+        /// Activate window using the UUID string (from kdotool)
+        pub fn activate_window_by_uuid(uuid: &str) -> bool {
+            let kdotool_paths = [
+                "/usr/local/bin/kdotool",
+                "/usr/bin/kdotool",
+                "bin/kdotool",  // Relative to src-tauri directory
+                "../bin/kdotool",  // Relative to project root
+            ];
+
+            let kdotool = kdotool_paths.iter()
+                .find(|path| std::path::Path::new(path).exists())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "kdotool".to_string());
+
+            eprintln!("[kdotool] Attempting to activate window: {}", uuid);
+            eprintln!("[kdotool] Using kdotool at: {}", kdotool);
+
+            let result = Command::new(&kdotool)
+                .args(["windowactivate", uuid])
+                .output();
+
+            match result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("[kdotool] stdout: {}", stdout);
+                    eprintln!("[kdotool] stderr: {}", stderr);
+                    if output.status.success() {
+                        eprintln!("[kdotool] Successfully activated window: {}", uuid);
+                        true
+                    } else {
+                        eprintln!("[kdotool] Failed to activate window, exit code: {:?}", output.status.code());
+                        false
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[kdotool] Error activating window: {:?}", e);
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn get_windows() -> Vec<WindowInfo> {
+        let display_server = detect_display_server();
+        eprintln!("[Platform] Detected display server: {:?}", display_server);
+        match display_server {
+            DisplayServer::X11 => {
+                let windows = x11_backend::get_windows();
+                eprintln!("[Platform] X11 returned {} windows", windows.len());
+                windows
+            },
+            DisplayServer::Wayland => {
+                // Try Wayland native backends first
+                if let Some(windows) = wayland_backend::get_windows() {
+                    eprintln!("[Platform] Wayland native returned {} windows", windows.len());
+                    windows
+                } else {
+                    eprintln!("[Platform] Wayland native failed, trying XWayland fallback");
+                    let windows = x11_backend::get_windows();
+                    eprintln!("[Platform] XWayland returned {} windows", windows.len());
+                    windows
+                }
+            },
+        }
+    }
+
+    pub fn switch_window(window_id: String) {
+        eprintln!("[Platform] switch_window called with id: {}", window_id);
+        match detect_display_server() {
+            DisplayServer::X11 => {
+                eprintln!("[Platform] Using X11 backend");
+                if let Ok(id) = window_id.parse::<usize>() {
+                    x11_backend::switch_window(id);
+                }
+            },
+            DisplayServer::Wayland => {
+                eprintln!("[Platform] Using Wayland backend");
+                // For Wayland, window_id IS the UUID string
+                eprintln!("[Platform] Calling activate_window_by_uuid with uuid: {}", window_id);
+                wayland_backend::activate_window_by_uuid(&window_id);
+            },
+        }
+    }
 }
 
 #[tauri::command]
@@ -580,7 +1027,8 @@ fn search_windows(windows: Vec<WindowInfo>, query: String) -> Vec<WindowInfo> {
 }
 
 #[tauri::command]
-fn switch_window(window_id: usize) {
+fn switch_window(window_id: String) {
+    eprintln!("[Command] switch_window called with window_id: {}", window_id);
     platform::switch_window(window_id);
 }
 
@@ -792,20 +1240,20 @@ mod tests {
     #[test]
     fn test_window_info_serde() {
         let window = WindowInfo {
-            id: 123,
+            id: "123".to_string(),
             title: "Test Window".to_string(),
             process_name: "test.exe".to_string(),
         };
 
         // Serialize
         let json = serde_json::to_string(&window).unwrap();
-        assert!(json.contains("\"id\":123"));
+        assert!(json.contains("\"id\":\"123\""));
         assert!(json.contains("\"title\":\"Test Window\""));
         assert!(json.contains("\"process_name\":\"test.exe\""));
 
         // Deserialize
         let decoded: WindowInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.id, 123);
+        assert_eq!(decoded.id, "123");
         assert_eq!(decoded.title, "Test Window");
         assert_eq!(decoded.process_name, "test.exe");
     }
@@ -813,7 +1261,7 @@ mod tests {
     #[test]
     fn test_window_info_clone() {
         let window = WindowInfo {
-            id: 1,
+            id: "1".to_string(),
             title: "Original".to_string(),
             process_name: "app.exe".to_string(),
         };

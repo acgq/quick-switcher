@@ -20,3 +20,8 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+# Binary tools
+bin/
+
+# Generated schemas
+src-tauri/gen/

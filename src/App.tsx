@@ -7,7 +7,7 @@ import './App.css'
 import Settings from './Settings'
 
 interface WindowInfo {
-  id: number
+  id: string  // Use string to avoid JavaScript number precision issues
   title: string
   process_name: string
 }
