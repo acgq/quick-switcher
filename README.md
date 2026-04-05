@@ -28,7 +28,7 @@
 | Windows | - | ✅ Win32 API | ✅ Win32 API |
 | macOS | - | ✅ NSWorkspace + AXUIElement | ✅ NSWorkspace |
 | Linux | X11 | ✅ X11 EWMH | ✅ X11 EWMH |
-| Linux | Wayland (KDE) | ✅ kdotool | ✅ kdotool |
+| Linux | Wayland (KDE) | ✅ KWin Scripting API | ✅ KWin Scripting API |
 | Linux | Wayland (GNOME) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
 | Linux | Wayland (Sway/Hyprland) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
 
@@ -44,7 +44,8 @@
 │   ├── src/
 │   │   ├── main.rs        # 入口
 │   │   ├── lib.rs         # 主逻辑
-│   │   └── search.rs      # 搜索匹配模块
+│   │   ├── search.rs      # 搜索匹配模块
+│   │   └── kwin.rs        # KWayland 集成 (Linux only)
 │   ├── Cargo.toml         # Rust 依赖
 │   └── tauri.conf.json    # Tauri 配置
 ├── package.json            # Node 依赖
@@ -72,16 +73,7 @@ sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg
 sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
 ```
 
-**Wayland 支持**：对于 KDE Plasma Wayland，需要安装 [kdotool](https://github.com/jinliu/kdotool)：
-```bash
-# 从 AUR 安装 (Arch Linux)
-yay -S kdotool-bin
-
-# 或手动下载
-curl -L -o kdotool.tar.gz "https://github.com/jinliu/kdotool/releases/download/v0.2.2/kdotool-0.2.2-x86_64-unknown-linux-gnu.tar.gz"
-tar -xzf kdotool.tar.gz
-sudo mv kdotool /usr/local/bin/
-```
+**Wayland KDE 支持**：内置 KWin Scripting API，无需额外依赖。
 
 ### 安装依赖
 
@@ -152,12 +144,8 @@ npm run tauri build
 
 **注意**：
 - X11 环境直接可用
-- Wayland 环境需要安装 `kdotool`（见上方 Linux 额外要求）
-
-**Arch Linux 用户**：可以使用 AUR 包：
-```bash
-yay -S quick-switcher-bin  # 待发布
-```
+- Wayland KDE Plasma 6 内置支持，无需额外依赖
+- 其他 Wayland 环境（GNOME/Sway）只能看到 XWayland 窗口
 
 ## 配置
 
@@ -189,16 +177,9 @@ yay -S quick-switcher-bin  # 待发布
 
 ### Linux Wayland 窗口列表为空或切换不工作？
 
-确保已安装 `kdotool`：
-```bash
-# 检查是否安装
-which kdotool
+**KDE Plasma 6**：内置 KWin Scripting API 支持，无需额外配置。
 
-# 测试是否工作
-kdotool search --name ".*" --limit 3
-```
-
-如果 `kdotool` 不可用，应用会自动回退到 XWayland 模式（只能看到 X11 应用窗口）。
+**其他 Wayland 环境（GNOME/Sway）**：目前仅支持 XWayland 窗口（X11 应用）。要查看原生 Wayland 窗口需要 compositor 特定协议支持，目前正在开发中。
 
 ### 多显示器下窗口位置不对
 

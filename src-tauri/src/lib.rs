@@ -11,6 +11,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut}
 
 mod search;
 
+#[cfg(target_os = "linux")]
+mod kwin;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub id: String,  // Use string ID to avoid JavaScript number precision issues
@@ -768,152 +771,36 @@ mod platform {
 
     mod wayland_backend {
         use super::super::WindowInfo;
-        use std::process::Command;
+        use super::super::kwin;
 
-        /// Get windows via kdotool (KDE Wayland)
+        /// Get windows via KWin scripting API (KDE Wayland)
         pub fn get_windows() -> Option<Vec<WindowInfo>> {
-            // Try kdotool first (for KDE Wayland)
-            if let Some(windows) = get_windows_kdotool() {
-                return Some(windows);
-            }
-
-            None
-        }
-
-        /// Use kdotool to get window list on KDE Wayland
-        fn get_windows_kdotool() -> Option<Vec<WindowInfo>> {
-            // kdotool path - check multiple locations
-            let kdotool_paths = [
-                "/usr/local/bin/kdotool",
-                "/usr/bin/kdotool",
-                "bin/kdotool",  // Relative to src-tauri directory
-                "../bin/kdotool",  // Relative to project root
-            ];
-
-            let kdotool = kdotool_paths.iter()
-                .find(|path| std::path::Path::new(path).exists())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "kdotool".to_string());
-
-            // Get all window IDs
-            let output = match Command::new(&kdotool)
-                .args(["search", "--name", ".*"])
-                .output()
-            {
-                Ok(o) => o,
-                Err(e) => {
-                    eprintln!("[kdotool] Failed to execute: {:?}", e);
-                    return None;
-                }
-            };
-
-            if !output.status.success() {
-                eprintln!("[kdotool] Command failed");
+            // Check if running KDE Plasma 6
+            if !kwin::is_kde_plasma6() {
+                eprintln!("[Wayland] Not KDE Plasma 6, skipping KWin backend");
                 return None;
             }
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let window_ids: Vec<&str> = stdout.lines().collect();
+            eprintln!("[Wayland] Using integrated KWin scripting");
+            let kwin_windows = kwin::get_windows();
 
-            eprintln!("[kdotool] Found {} windows", window_ids.len());
+            eprintln!("[Wayland] KWin returned {} windows", kwin_windows.len());
 
-            let mut windows = Vec::new();
-
-            for id in window_ids {
-                let id = id.trim();
-                if id.is_empty() {
-                    continue;
-                }
-
-                // Get window name
-                let name_output = Command::new(&kdotool)
-                    .args(["getwindowname", id])
-                    .output()
-                    .ok();
-
-                let name = name_output
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-
-                // Get window class name
-                let class_output = Command::new(&kdotool)
-                    .args(["getwindowclassname", id])
-                    .output()
-                    .ok();
-
-                let class_name = class_output
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-
-                // Skip windows with empty names (like plasmashell panels)
-                if name.is_empty() {
-                    continue;
-                }
-
-                // Filter out Quick Switcher's own windows
-                if class_name.to_lowercase().contains("quick-switcher") {
-                    continue;
-                }
-
-                // Use UUID string directly as ID (to avoid JavaScript number precision issues)
-                let window_id = id.to_string();
-
-                windows.push(WindowInfo {
-                    id: window_id,
-                    title: name,
-                    process_name: class_name,
-                });
-            }
-
-            if windows.is_empty() {
+            if kwin_windows.is_empty() {
                 None
             } else {
-                Some(windows)
+                Some(kwin_windows.into_iter().map(|w| WindowInfo {
+                    id: w.id,
+                    title: w.title,
+                    process_name: w.class_name,
+                }).collect())
             }
         }
 
-        /// Activate window using the UUID string (from kdotool)
+        /// Activate window using KWin scripting API
         pub fn activate_window_by_uuid(uuid: &str) -> bool {
-            let kdotool_paths = [
-                "/usr/local/bin/kdotool",
-                "/usr/bin/kdotool",
-                "bin/kdotool",  // Relative to src-tauri directory
-                "../bin/kdotool",  // Relative to project root
-            ];
-
-            let kdotool = kdotool_paths.iter()
-                .find(|path| std::path::Path::new(path).exists())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "kdotool".to_string());
-
-            eprintln!("[kdotool] Attempting to activate window: {}", uuid);
-            eprintln!("[kdotool] Using kdotool at: {}", kdotool);
-
-            let result = Command::new(&kdotool)
-                .args(["windowactivate", uuid])
-                .output();
-
-            match result {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("[kdotool] stdout: {}", stdout);
-                    eprintln!("[kdotool] stderr: {}", stderr);
-                    if output.status.success() {
-                        eprintln!("[kdotool] Successfully activated window: {}", uuid);
-                        true
-                    } else {
-                        eprintln!("[kdotool] Failed to activate window, exit code: {:?}", output.status.code());
-                        false
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[kdotool] Error activating window: {:?}", e);
-                    false
-                }
-            }
+            eprintln!("[Wayland] Attempting to activate window via KWin: {}", uuid);
+            kwin::activate_window(uuid)
         }
     }
 
