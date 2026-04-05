@@ -21,6 +21,17 @@
 - **前端**：React + TypeScript + Vite
 - **样式**：CSS
 
+## 平台支持
+
+| 平台 | 显示服务器 | 窗口列表 | 窗口切换 |
+|------|-----------|---------|---------|
+| Windows | - | ✅ Win32 API | ✅ Win32 API |
+| macOS | - | ✅ NSWorkspace + AXUIElement | ✅ NSWorkspace |
+| Linux | X11 | ✅ X11 EWMH | ✅ X11 EWMH |
+| Linux | Wayland (KDE) | ✅ kdotool | ✅ kdotool |
+| Linux | Wayland (GNOME) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
+| Linux | Wayland (Sway/Hyprland) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
+
 ## 项目结构
 
 ```
@@ -44,9 +55,33 @@
 
 ### 前置要求
 
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 20.19+ 或 22.12+
 - [Rust](https://www.rust-lang.org/) 1.70+
 - [pnpm](https://pnpm.io/) 或 npm
+
+#### Linux 额外要求
+
+```bash
+# Ubuntu/Debian
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+# Arch Linux
+sudo pacman -S webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg
+
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
+```
+
+**Wayland 支持**：对于 KDE Plasma Wayland，需要安装 [kdotool](https://github.com/jinliu/kdotool)：
+```bash
+# 从 AUR 安装 (Arch Linux)
+yay -S kdotool-bin
+
+# 或手动下载
+curl -L -o kdotool.tar.gz "https://github.com/jinliu/kdotool/releases/download/v0.2.2/kdotool-0.2.2-x86_64-unknown-linux-gnu.tar.gz"
+tar -xzf kdotool.tar.gz
+sudo mv kdotool /usr/local/bin/
+```
 
 ### 安装依赖
 
@@ -111,8 +146,18 @@ npm run tauri build
 ```
 
 输出文件：
-- `src-tauri/target/release/bundle/deb/` - DEB 包
-- `src-tauri/target/release/bundle/appimage/` - AppImage
+- `src-tauri/target/release/bundle/deb/` - DEB 包（Debian/Ubuntu）
+- `src-tauri/target/release/bundle/appimage/` - AppImage（通用）
+- `src-tauri/target/release/bundle/rpm/` - RPM 包（Fedora/openSUSE）
+
+**注意**：
+- X11 环境直接可用
+- Wayland 环境需要安装 `kdotool`（见上方 Linux 额外要求）
+
+**Arch Linux 用户**：可以使用 AUR 包：
+```bash
+yay -S quick-switcher-bin  # 待发布
+```
 
 ## 配置
 
@@ -142,6 +187,18 @@ npm run tauri build
 
 ## 常见问题
 
+### Linux Wayland 窗口列表为空或切换不工作？
+
+确保已安装 `kdotool`：
+```bash
+# 检查是否安装
+which kdotool
+
+# 测试是否工作
+kdotool search --name ".*" --limit 3
+```
+
+如果 `kdotool` 不可用，应用会自动回退到 XWayland 模式（只能看到 X11 应用窗口）。
 
 ### 多显示器下窗口位置不对
 

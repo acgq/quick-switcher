@@ -37,6 +37,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "shortDescription": "A fast window switcher for desktop",
+    "longDescription": "Quick Switcher is a cross-platform window switcher with fuzzy search, pinyin support, and keyboard-first navigation.",
+    "category": "Utility"
   }
 }
