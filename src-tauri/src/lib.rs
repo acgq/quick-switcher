@@ -301,27 +301,29 @@ mod platform {
         }
     }
 
-    pub fn switch_window(id: usize) {
-        unsafe {
-            let hwnd = HWND(id as *mut std::ffi::c_void);
+    pub fn switch_window(id: String) {
+        if let Ok(window_id) = id.parse::<usize>() {
+            unsafe {
+                let hwnd = HWND(window_id as *mut std::ffi::c_void);
 
-            // Check if window is minimized
-            let is_iconic = IsIconic(hwnd).as_bool();
+                // Check if window is minimized
+                let is_iconic = IsIconic(hwnd).as_bool();
 
-            if is_iconic {
-                // If minimized, restore it
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            } else if IsZoomed(hwnd).as_bool() {
-                // If maximized, show maximized
-                let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
-            } else {
-                // Otherwise just show
-                let _ = ShowWindow(hwnd, SW_SHOW);
+                if is_iconic {
+                    // If minimized, restore it
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                } else if IsZoomed(hwnd).as_bool() {
+                    // If maximized, show maximized
+                    let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+                } else {
+                    // Otherwise just show
+                    let _ = ShowWindow(hwnd, SW_SHOW);
+                }
+
+                // Use SwitchToThisWindow to forcefully bring window to front
+                // This is more reliable than SetForegroundWindow for some apps
+                SwitchToThisWindow(hwnd, true);
             }
-
-            // Use SwitchToThisWindow to forcefully bring window to front
-            // This is more reliable than SetForegroundWindow for some apps
-            SwitchToThisWindow(hwnd, true);
         }
     }
 }
@@ -484,25 +486,27 @@ mod platform {
         fn CFRelease(cf: *mut std::ffi::c_void);
     }
 
-    pub fn switch_window(window_id: usize) {
-        unsafe {
-            let workspace: ObjcId = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let apps: ObjcId = msg_send![workspace, runningApplications];
+    pub fn switch_window(window_id: String) {
+        if let Ok(pid) = window_id.parse::<usize>() {
+            unsafe {
+                let workspace: ObjcId = msg_send![class!(NSWorkspace), sharedWorkspace];
+                let apps: ObjcId = msg_send![workspace, runningApplications];
 
-            if apps.is_null() {
-                return;
-            }
+                if apps.is_null() {
+                    return;
+                }
 
-            let count: usize = msg_send![apps, count];
+                let count: usize = msg_send![apps, count];
 
-            for i in 0..count {
-                let app: ObjcId = msg_send![apps, objectAtIndex: i];
-                let pid: i32 = msg_send![app, processIdentifier];
+                for i in 0..count {
+                    let app: ObjcId = msg_send![apps, objectAtIndex: i];
+                    let app_pid: i32 = msg_send![app, processIdentifier];
 
-                if pid as usize == window_id {
-                    // NSApplicationActivateIgnoringOtherApps = 1 << 1
-                    let _: () = msg_send![app, activateWithOptions: 2];
-                    break;
+                    if app_pid as usize == pid {
+                        // NSApplicationActivateIgnoringOtherApps = 1 << 1
+                        let _: () = msg_send![app, activateWithOptions: 2];
+                        break;
+                    }
                 }
             }
         }
@@ -721,51 +725,53 @@ mod platform {
             0
         }
 
-        pub fn switch_window(window_id: usize) {
-            let (conn, screen_num) = match RustConnection::connect(None) {
-                Ok(c) => c,
-                Err(_) => return,
-            };
-
-            let screen = match conn.setup().roots.get(screen_num) {
-                Some(s) => s,
-                None => return,
-            };
-            let root = screen.root;
-            let window = window_id as Window;
-
-            // Get _NET_ACTIVE_WINDOW atom
-            let active_window_atom = match conn.intern_atom(false, _NET_ACTIVE_WINDOW.as_bytes()) {
-                Ok(cookie) => match cookie.reply() {
-                    Ok(reply) => reply.atom,
+        pub fn switch_window(window_id: String) {
+            if let Ok(id) = window_id.parse::<usize>() {
+                let (conn, screen_num) = match RustConnection::connect(None) {
+                    Ok(c) => c,
                     Err(_) => return,
-                },
-                Err(_) => return,
-            };
+                };
 
-            // Send _NET_ACTIVE_WINDOW client message
-            let event = ClientMessageEvent {
-                response_type: CLIENT_MESSAGE_EVENT,
-                sequence: 0,
-                format: 32,
-                window,
-                type_: active_window_atom,
-                data: [2u32, 0, 0, 0, 0].into(), // source=2 (user), timestamp=0
-            };
+                let screen = match conn.setup().roots.get(screen_num) {
+                    Some(s) => s,
+                    None => return,
+                };
+                let root = screen.root;
+                let window = id as Window;
 
-            // Send event with SubstructureRedirectMask | SubstructureNotifyMask
-            let _ = conn.send_event(
-                false,
-                root,
-                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-                event.serialize(),
-            );
+                // Get _NET_ACTIVE_WINDOW atom
+                let active_window_atom = match conn.intern_atom(false, _NET_ACTIVE_WINDOW.as_bytes()) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(reply) => reply.atom,
+                        Err(_) => return,
+                    },
+                    Err(_) => return,
+                };
 
-            let _ = conn.flush();
+                // Send _NET_ACTIVE_WINDOW client message
+                let event = ClientMessageEvent {
+                    response_type: CLIENT_MESSAGE_EVENT,
+                    sequence: 0,
+                    format: 32,
+                    window,
+                    type_: active_window_atom,
+                    data: [2u32, 0, 0, 0, 0].into(), // source=2 (user), timestamp=0
+                };
 
-            // Also try XSetInputFocus as fallback
-            let _ = conn.set_input_focus(InputFocus::POINTER_ROOT, window, CURRENT_TIME);
-            let _ = conn.flush();
+                // Send event with SubstructureRedirectMask | SubstructureNotifyMask
+                let _ = conn.send_event(
+                    false,
+                    root,
+                    EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                    event.serialize(),
+                );
+
+                let _ = conn.flush();
+
+                // Also try XSetInputFocus as fallback
+                let _ = conn.set_input_focus(InputFocus::POINTER_ROOT, window, CURRENT_TIME);
+                let _ = conn.flush();
+            }
         }
     }
 
@@ -833,9 +839,7 @@ mod platform {
         match detect_display_server() {
             DisplayServer::X11 => {
                 eprintln!("[Platform] Using X11 backend");
-                if let Ok(id) = window_id.parse::<usize>() {
-                    x11_backend::switch_window(id);
-                }
+                x11_backend::switch_window(window_id);
             },
             DisplayServer::Wayland => {
                 eprintln!("[Platform] Using Wayland backend");
