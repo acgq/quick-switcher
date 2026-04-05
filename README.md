@@ -23,14 +23,64 @@
 
 ## 平台支持
 
-| 平台 | 显示服务器 | 窗口列表 | 窗口切换 |
-|------|-----------|---------|---------|
-| Windows | - | ✅ Win32 API | ✅ Win32 API |
-| macOS | - | ✅ NSWorkspace + AXUIElement | ✅ NSWorkspace |
-| Linux | X11 | ✅ X11 EWMH | ✅ X11 EWMH |
-| Linux | Wayland (KDE) | ✅ KWin Scripting API | ✅ KWin Scripting API |
-| Linux | Wayland (GNOME) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
-| Linux | Wayland (Sway/Hyprland) | ⚠️ 部分 XWayland | ⚠️ 部分 XWayland |
+| 平台 | 架构 | 状态 |
+|------|------|------|
+| Linux (X11) | x86_64, aarch64 | ✅ |
+| Linux (KDE Wayland) | x86_64, aarch64 | ✅ |
+| Linux (GNOME/Sway) | x86_64, aarch64 | ⚠️ 仅 XWayland |
+| Windows | x86_64, aarch64 | ✅ |
+| macOS (Intel) | x86_64 | ✅ |
+| macOS (Apple Silicon) | aarch64 | ✅ |
+
+## 安装
+
+### Linux
+
+#### Arch Linux (AUR)
+```bash
+yay -S quick-switcher-bin
+```
+
+#### Debian/Ubuntu
+下载对应架构的 `.deb` 文件：
+- x86_64: `quick-switcher_x86_64.deb`
+- aarch64: `quick-switcher_aarch64.deb`
+
+```bash
+sudo apt install ./quick-switcher_x86_64.deb
+```
+
+#### Fedora/openSUSE
+下载对应架构的 `.rpm` 文件：
+- x86_64: `quick-switcher_x86_64.rpm`
+- aarch64: `quick-switcher_aarch64.rpm`
+
+```bash
+sudo rpm -i ./quick-switcher_x86_64.rpm
+```
+
+#### AppImage (通用)
+下载 `.AppImage` 文件，赋予执行权限后直接运行：
+```bash
+chmod +x quick-switcher_x86_64.AppImage
+./quick-switcher_x86_64.AppImage
+```
+
+### Windows
+
+下载 MSI 或 NSIS 安装包：
+- x86_64: `quick-switcher_x86_64.msi` 或 `quick-switcher_x86_64-setup.exe`
+- aarch64: `quick-switcher_aarch64.msi` 或 `quick-switcher_aarch64-setup.exe`
+
+双击安装包进行安装。
+
+### macOS
+
+下载对应架构的 DMG 文件：
+- Intel Mac: `quick-switcher_x86_64.dmg`
+- Apple Silicon: `quick-switcher_aarch64.dmg`
+
+打开 DMG 文件，将应用拖拽到 Applications 文件夹。
 
 ## 项目结构
 

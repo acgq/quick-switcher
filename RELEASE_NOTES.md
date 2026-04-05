@@ -15,7 +15,7 @@
 - **Arch Linux (AUR)**: `yay -S quick-switcher-bin`
 - **Debian/Ubuntu**: 下载 `.deb` 包，`sudo apt install ./xxx.deb`
 - **Fedora/openSUSE**: 下载 `.rpm` 包，`sudo rpm -i ./xxx.rpm`
-- **通用**: 下载 `.AppImage` 文件，直接运行
+- **AppImage**: 下载 `.AppImage` 文件，`chmod +x && ./xxx.AppImage`
 
 #### Windows
 下载 MSI 或 NSIS 安装包，双击安装
@@ -23,12 +23,11 @@
 #### macOS
 下载 DMG 文件，拖拽到 Applications
 
-### 平台支持
+### 支持架构
 
-| 平台 | 显示服务器 | 状态 |
-|------|-----------|------|
-| Linux | X11 | ✅ |
-| Linux | KDE Plasma 6 Wayland | ✅ 内置支持 |
-| Linux | GNOME/Sway Wayland | ⚠️ 仅 XWayland |
-| Windows | - | ✅ |
-| macOS | - | ✅ |
+| 平台 | 架构 |
+|------|------|
+| Linux | x86_64, aarch64 |
+| Windows | x86_64, aarch64 |
+| macOS (Intel) | x86_64 |
+| macOS (Apple Silicon) | aarch64 |
