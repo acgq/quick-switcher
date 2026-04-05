@@ -226,7 +226,7 @@ function App() {
     }
   }, [selectedIndex])
 
-  async function switchToWindow(id: number) {
+  async function switchToWindow(id: string) {
     await invoke('switch_window', { windowId: id })
     await invoke('hide_window')
   }
