@@ -214,8 +214,8 @@ mod platform {
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextW, GetWindowThreadProcessId, GetWindowRect,
-        GetWindowLongPtrW, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SwitchToThisWindow,
-        GWL_EXSTYLE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, WS_EX_TOOLWINDOW,
+        GetWindowLongPtrW, GetAncestor, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SwitchToThisWindow,
+        GA_ROOT, GWL_EXSTYLE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
 
     pub fn get_windows() -> Vec<WindowInfo> {
@@ -245,9 +245,22 @@ mod platform {
             return TRUE;
         }
 
-        // Filter out tool windows (WS_EX_TOOLWINDOW)
+        // Filter tool windows, but allow them if they have WS_EX_APPWINDOW
+        // This matches Alt+Tab behavior
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if (ex_style & WS_EX_TOOLWINDOW.0 as isize) != 0 {
+        let is_tool_window = (ex_style & WS_EX_TOOLWINDOW.0 as isize) != 0;
+        let is_app_window = (ex_style & WS_EX_APPWINDOW.0 as isize) != 0;
+        if is_tool_window && !is_app_window {
+            return TRUE;
+        }
+
+        // Filter out windows that cannot be activated (like "Windows Input Experience")
+        if (ex_style & WS_EX_NOACTIVATE.0 as isize) != 0 {
+            return TRUE;
+        }
+
+        // Filter out child windows (only show root windows like Alt+Tab)
+        if GetAncestor(hwnd, GA_ROOT) != hwnd {
             return TRUE;
         }
 
@@ -1222,5 +1235,13 @@ mod tests {
     fn test_should_include_window_whitespace_title() {
         // Whitespace-only title is considered non-empty by is_empty()
         assert!(should_include_window("  ", true));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_win_get_windows(){
+        let windows = platform::get_windows();
+
+        assert!(windows.len() > 1)
     }
 }
