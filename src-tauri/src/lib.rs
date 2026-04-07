@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -45,6 +45,15 @@ impl Default for ShortcutConfig {
 static SHORTCUT_CONFIG: LazyLock<Mutex<ShortcutConfig>> = LazyLock::new(|| {
     Mutex::new(load_config())
 });
+
+// Track when window was last shown to prevent race condition with focus events
+// On Linux, focus events can fire during window show/hide transitions
+static LAST_WINDOW_SHOW: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| {
+    Mutex::new(None)
+});
+
+// Cooldown duration to ignore focus-lost events after showing window
+const FOCUS_LOST_COOLDOWN_MS: u64 = 300;
 
 /// Center window on the monitor where mouse cursor is located
 fn center_window_on_mouse_monitor(window: &tauri::WebviewWindow) {
@@ -977,6 +986,11 @@ fn set_shortcut(app: tauri::AppHandle, config: ShortcutConfig) -> Result<(), Str
                     window.hide().unwrap();
                 } else {
                     center_window_on_mouse_monitor(&window);
+                    // Record show time to prevent race condition with focus events
+                    {
+                        let mut last_show = LAST_WINDOW_SHOW.lock().unwrap();
+                        *last_show = Some(Instant::now());
+                    }
                     window.show().unwrap();
                     window.set_focus().unwrap();
                     let _ = app_handle.emit("window-shown", ());
@@ -1048,6 +1062,11 @@ pub fn run() {
                         "show" => {
                             let window = app.get_webview_window("main").unwrap();
                             center_window_on_mouse_monitor(&window);
+                            // Record show time to prevent race condition with focus events
+                            {
+                                let mut last_show = LAST_WINDOW_SHOW.lock().unwrap();
+                                *last_show = Some(Instant::now());
+                            }
                             window.show().unwrap();
                             window.set_focus().unwrap();
                             let _ = app.emit("window-shown", ());
@@ -1096,6 +1115,11 @@ pub fn run() {
                             window.hide().unwrap();
                         } else {
                             center_window_on_mouse_monitor(&window);
+                            // Record show time to prevent race condition with focus events
+                            {
+                                let mut last_show = LAST_WINDOW_SHOW.lock().unwrap();
+                                *last_show = Some(Instant::now());
+                            }
                             window.show().unwrap();
                             window.set_focus().unwrap();
                             // Emit event to clear search
@@ -1106,11 +1130,28 @@ pub fn run() {
             }
 
             // Hide window when it loses focus
+            // On Linux, ignore focus-lost events shortly after showing window to prevent race condition
             let main_window = app.get_webview_window("main").unwrap();
             let window_clone = main_window.clone();
             main_window.on_window_event(move |event| {
                 if let tauri::WindowEvent::Focused(false) = event {
-                    window_clone.hide().unwrap();
+                    // Check cooldown to prevent race condition on Linux
+                    let should_hide = {
+                        let last_show = LAST_WINDOW_SHOW.lock().unwrap();
+                        match *last_show {
+                            Some(time) => {
+                                // Only hide if enough time has passed since last show
+                                time.elapsed().as_millis() > FOCUS_LOST_COOLDOWN_MS as u128
+                            }
+                            None => true, // No record of showing, allow hide
+                        }
+                    };
+                    if should_hide {
+                        window_clone.hide().unwrap();
+                        // Clear the show time record
+                        let mut last_show = LAST_WINDOW_SHOW.lock().unwrap();
+                        *last_show = None;
+                    }
                 }
             });
 
